@@ -31,6 +31,11 @@ on:
         description: 'Boolean to decide whether to deploy an AML compute cluster or not'
         type: boolean
         required: true
+      aml_compute_sku:
+        description: 'VM SKU for the AML compute cluster'
+        type: string
+        required: false
+        default: 'STANDARD_D16S_V3'
       enable_monitoring:
         description: 'Boolean to decide whether to enable monitoring'
         type: boolean
@@ -192,6 +197,7 @@ jobs:
         -var "postfix=${{ inputs.postfix }}" \
         -var "environment=${{ inputs.environment }}" \
         -var "enable_aml_computecluster=${{ inputs.enable_aml_computecluster }}" \
+        -var "aml_compute_sku=${{ inputs.aml_compute_sku }}" \
         -var "enable_monitoring=${{ inputs.enable_monitoring }}" \
         -var "github_actions_service_principal_id=$SP_OBJECT_ID"
       env:
