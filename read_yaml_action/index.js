@@ -33,6 +33,28 @@ try {
     var terraform_st_container_name = String(configYaml["variables"]["terraform_st_container_name"]);
     var terraform_st_key = String(configYaml["variables"]["terraform_st_key"]);
 
+    // Bicep variables
+    var bicep_workingdir = String(configYaml["variables"]["bicep_workingdir"] || "infrastructure/bicep");
+    var bicep_template_file = String(configYaml["variables"]["bicep_template_file"] || "main.bicep");
+    var bicep_prefix = String(configYaml["variables"]["bicep_prefix"] || namespace);
+    var bicep_postfix = String(configYaml["variables"]["bicep_postfix"] || postfix);
+    var bicep_env = String(configYaml["variables"]["bicep_env"] || environment);
+    var bicep_location = String(configYaml["variables"]["bicep_location"] || location);
+
+    // Resolve bicep variables that reference other variables
+    if(checkGenerateEntity(bicep_prefix)){
+      bicep_prefix = namespace;
+    }
+    if(checkGenerateEntity(bicep_postfix)){
+      bicep_postfix = postfix;
+    }
+    if(checkGenerateEntity(bicep_env)){
+      bicep_env = environment;
+    }
+    if(checkGenerateEntity(bicep_location)){
+      bicep_location = location;
+    }
+
     if(checkGenerateEntity(terraform_st_location)){
       terraform_st_location = location;
     }
@@ -69,6 +91,12 @@ try {
     core.setOutput("terraform_st_storage_account", terraform_st_storage_account);
     core.setOutput("terraform_st_container_name", terraform_st_container_name);
     core.setOutput("terraform_st_key", terraform_st_key);
+    core.setOutput("bicep_workingdir", bicep_workingdir);
+    core.setOutput("bicep_template_file", bicep_template_file);
+    core.setOutput("bicep_prefix", bicep_prefix);
+    core.setOutput("bicep_postfix", bicep_postfix);
+    core.setOutput("bicep_env", bicep_env);
+    core.setOutput("bicep_location", bicep_location);
   });
   
 } catch (error) {

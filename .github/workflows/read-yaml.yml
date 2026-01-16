@@ -58,6 +58,24 @@ on:
       terraform_st_key:
         description: "Terraform State Key"
         value: ${{ jobs.read-yaml.outputs.terraform_st_key }}
+      bicep_workingdir:
+        description: "Bicep working directory"
+        value: ${{ jobs.read-yaml.outputs.bicep_workingdir }}
+      bicep_template_file:
+        description: "Bicep template file name"
+        value: ${{ jobs.read-yaml.outputs.bicep_template_file }}
+      bicep_prefix:
+        description: "Bicep resource prefix"
+        value: ${{ jobs.read-yaml.outputs.bicep_prefix }}
+      bicep_postfix:
+        description: "Bicep resource postfix"
+        value: ${{ jobs.read-yaml.outputs.bicep_postfix }}
+      bicep_env:
+        description: "Bicep environment"
+        value: ${{ jobs.read-yaml.outputs.bicep_env }}
+      bicep_location:
+        description: "Bicep deployment location"
+        value: ${{ jobs.read-yaml.outputs.bicep_location }}
 jobs:
   read-yaml:
     runs-on: ubuntu-latest
@@ -79,6 +97,12 @@ jobs:
       terraform_st_storage_account: ${{  steps.read_action_js.outputs.terraform_st_storage_account }}
       terraform_st_container_name: ${{  steps.read_action_js.outputs.terraform_st_container_name }}
       terraform_st_key: ${{  steps.read_action_js.outputs.terraform_st_key }}
+      bicep_workingdir: ${{  steps.read_action_js.outputs.bicep_workingdir }}
+      bicep_template_file: ${{  steps.read_action_js.outputs.bicep_template_file }}
+      bicep_prefix: ${{  steps.read_action_js.outputs.bicep_prefix }}
+      bicep_postfix: ${{  steps.read_action_js.outputs.bicep_postfix }}
+      bicep_env: ${{  steps.read_action_js.outputs.bicep_env }}
+      bicep_location: ${{  steps.read_action_js.outputs.bicep_location }}
     steps:
       - name: Checking out calling repo
         uses: actions/checkout@v4
