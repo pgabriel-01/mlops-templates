@@ -113,7 +113,7 @@ jobs:
         with:
           repository: ${{ github.repository }}
       - name: Read test
-        uses: pgabriel-01/mlops-templates/read_yaml_action@main
+        uses: pgabriel-01/mlops-templates/read_yaml_action@feature/bicep-ado-rbac-support
         id: read_action_js
         with:
           config: ${{ github.workspace }}/${{ inputs.file_name }}

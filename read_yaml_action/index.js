@@ -20,6 +20,7 @@ try {
     const postfix = String(configYaml["variables"]["postfix"]);
     const environment = String(configYaml["variables"]["environment"]);
     var enable_aml_computecluster = Boolean(configYaml["variables"]["enable_aml_computecluster"]);
+    var aml_compute_sku = String(configYaml["variables"]["aml_compute_sku"] || "STANDARD_D16S_V3");
     var enable_monitoring = Boolean(configYaml["variables"]["enable_monitoring"]);
     var resource_group = String(configYaml["variables"]["resource_group"]);
     var location = String(configYaml["variables"]["location"]);
@@ -80,6 +81,7 @@ try {
     core.setOutput("environment",environment);
     core.setOutput("enable_monitoring",enable_monitoring);
     core.setOutput("enable_aml_computecluster",enable_aml_computecluster);
+    core.setOutput("aml_compute_sku",aml_compute_sku);
     core.setOutput("resource_group",resource_group);
     core.setOutput("aml_workspace", aml_workspace);
     core.setOutput("bep", batch_endpoint_name);
