@@ -11,8 +11,10 @@ steps:
       workingDirectory: '$(System.DefaultWorkingDirectory)/$(terraform_workingdir)'
       scriptLocation: 'inlineScript'
       inlineScript: |
+        # Use Workload Identity Federation (OIDC) for Terraform authentication
+        export ARM_USE_OIDC=true
+        export ARM_OIDC_TOKEN=$idToken
         export ARM_CLIENT_ID=$servicePrincipalId
-        export ARM_CLIENT_SECRET=$servicePrincipalKey
         export ARM_TENANT_ID=$tenantId
         export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
         
@@ -24,5 +26,4 @@ steps:
           -var "enable_aml_computecluster=$(enable_aml_computecluster)" \
           -var "aml_compute_sku=$(aml_compute_sku)" \
           -var "enable_monitoring=$(enable_monitoring)" \
-          -var "client_secret=$ARM_CLIENT_SECRET" \
           -out=tfplan
