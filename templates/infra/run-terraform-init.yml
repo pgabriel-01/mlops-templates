@@ -2,14 +2,28 @@
 # Licensed under the MIT License.
 
 steps:
-  - task: TerraformTaskV2@2
+  - task: AzureCLI@2
     displayName: 'Terraform init'
     inputs:
-      provider: 'azurerm'
-      command: 'init'
+      azureSubscription: '$(ado_service_connection_rg)'
+      scriptType: 'bash'
+      addSpnToEnvironment: true
       workingDirectory: '$(System.DefaultWorkingDirectory)/$(terraform_workingdir)'
-      backendServiceArm: '$(ado_service_connection_rg)'
-      backendAzureRmResourceGroupName: '$(terraform_st_resource_group)'
-      backendAzureRmStorageAccountName: '$(terraform_st_storage_account)'
-      backendAzureRmContainerName: '$(terraform_st_container_name)'
-      backendAzureRmKey: '$(terraform_st_key)'
+      scriptLocation: 'inlineScript'
+      inlineScript: |
+        # Set ARM environment variables for Terraform authentication
+        export ARM_CLIENT_ID=$servicePrincipalId
+        export ARM_CLIENT_SECRET=$servicePrincipalKey
+        export ARM_TENANT_ID=$tenantId
+        export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+        
+        # Run terraform init with azurerm backend using service principal
+        terraform init \
+          -backend-config="storage_account_name=$(terraform_st_storage_account)" \
+          -backend-config="container_name=$(terraform_st_container_name)" \
+          -backend-config="key=$(terraform_st_key)" \
+          -backend-config="resource_group_name=$(terraform_st_resource_group)" \
+          -backend-config="subscription_id=$ARM_SUBSCRIPTION_ID" \
+          -backend-config="tenant_id=$ARM_TENANT_ID" \
+          -backend-config="client_id=$ARM_CLIENT_ID" \
+          -backend-config="client_secret=$ARM_CLIENT_SECRET"

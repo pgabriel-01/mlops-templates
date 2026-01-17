@@ -10,11 +10,5 @@ steps:
       addSpnToEnvironment: true
       scriptLocation: 'inlineScript'
       inlineScript: |
-        # Create storage account
+        # Create storage account with shared key access enabled for Terraform backend
         az storage account create -n $(terraform_st_storage_account) -g $(terraform_st_resource_group) -l $(location) --sku Standard_LRS --allow-shared-key-access true
-        
-        # Grant Storage Blob Data Contributor role to the service principal for Azure AD auth
-        if [[ ! -z "${servicePrincipalId:-}" ]]; then
-          STORAGE_ID=$(az storage account show -n $(terraform_st_storage_account) -g $(terraform_st_resource_group) --query id -o tsv)
-          az role assignment create --assignee $servicePrincipalId --role "Storage Blob Data Contributor" --scope $STORAGE_ID || true
-        fi

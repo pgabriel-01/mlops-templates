@@ -2,9 +2,13 @@
 # Licensed under the MIT License.
 
 steps:
-  - task: TerraformTaskV2@2
+  - task: AzureCLI@2
     displayName: 'Terraform validate'
     inputs:
-      provider: 'azurerm'
-      command: 'validate'
-      workingDirectory: $(System.DefaultWorkingDirectory)/$(terraform_workingdir)
+      azureSubscription: '$(ado_service_connection_rg)'
+      scriptType: 'bash'
+      addSpnToEnvironment: true
+      workingDirectory: '$(System.DefaultWorkingDirectory)/$(terraform_workingdir)'
+      scriptLocation: 'inlineScript'
+      inlineScript: |
+        terraform validate

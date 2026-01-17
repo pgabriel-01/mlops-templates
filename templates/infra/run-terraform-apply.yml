@@ -2,11 +2,18 @@
 # Licensed under the MIT License.
 
 steps:
-  - task: TerraformTaskV2@2
+  - task: AzureCLI@2
     displayName: 'Terraform apply'
     inputs:
-      provider: 'azurerm'
-      command: 'apply'
+      azureSubscription: '$(ado_service_connection_rg)'
+      scriptType: 'bash'
+      addSpnToEnvironment: true
       workingDirectory: '$(System.DefaultWorkingDirectory)/$(terraform_workingdir)'
-      commandOptions: '-var "location=$(location)" -var "prefix=$(namespace)" -var "postfix=$(postfix)" -var "environment=$(environment)" -var "enable_aml_computecluster=$(enable_aml_computecluster)" -var "aml_compute_sku=$(aml_compute_sku)" -var "enable_monitoring=$(enable_monitoring)" -var "client_secret=$(CLIENT_SECRET)"'
-      environmentServiceNameAzureRM: '$(ado_service_connection_rg)'
+      scriptLocation: 'inlineScript'
+      inlineScript: |
+        export ARM_CLIENT_ID=$servicePrincipalId
+        export ARM_CLIENT_SECRET=$servicePrincipalKey
+        export ARM_TENANT_ID=$tenantId
+        export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+        
+        terraform apply -auto-approve tfplan
