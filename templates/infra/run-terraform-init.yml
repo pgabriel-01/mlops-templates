@@ -32,4 +32,5 @@ steps:
           -backend-config="subscription_id=$ARM_SUBSCRIPTION_ID" \
           -backend-config="tenant_id=$ARM_TENANT_ID" \
           -backend-config="client_id=$ARM_CLIENT_ID" \
-          -backend-config="use_oidc=true"
+          -backend-config="use_oidc=true" \
+          -backend-config="use_azuread_auth=true"
