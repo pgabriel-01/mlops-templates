@@ -19,4 +19,6 @@ steps:
       workingDirectory: $(System.DefaultWorkingDirectory)
       scriptLocation: inlineScript
       inlineScript: |
+        # Use Entra ID authentication instead of storage account keys
+        export AZURE_STORAGE_AUTH_MODE=login
         az ml data create --file ${{ parameters.data_file }} --name ${{ parameters.data_name }} --type ${{ parameters.data_type }}

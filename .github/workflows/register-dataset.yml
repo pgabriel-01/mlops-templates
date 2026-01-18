@@ -48,10 +48,12 @@ jobs:
       - name: create-dataset-from-file
         if: ${{ inputs.file_type == ''}}
         run: |
+          export AZURE_STORAGE_AUTH_MODE=login
           az ml data create --file ${{ github.workspace }}/${{ inputs.data_file }} --resource-group ${{ inputs.resource_group }} \
           --workspace-name ${{ inputs.workspace_name }} --name ${{ inputs.name }}
       - name: create-dataset-as-job
         if: ${{ inputs.file_type != ''}}
         run: |
+          export AZURE_STORAGE_AUTH_MODE=login
           az ml job create --file ${{ github.workspace }}/${{ inputs.data_file }} --resource-group ${{ inputs.resource_group }} \
           --workspace-name ${{ inputs.workspace_name }}
