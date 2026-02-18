@@ -13,7 +13,7 @@ steps:
         set -e # fail on error
         python -m pip install -U --force-reinstall pip
         pip install azure-cli>=2.55.0
-        pip install azure-ai-ml>=1.12.0
+        pip install azure-ai-ml>=1.31.0
         az version    
 
 

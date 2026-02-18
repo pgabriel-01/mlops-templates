@@ -16,7 +16,7 @@ def parse_args():
     parser.add_argument("--description", type=str, help="Description of the environment")
     parser.add_argument("--env_path", type=str, help="Local path of environment file(s)")
     parser.add_argument("--build_type", type=str, help="Build type: either docker or conda")
-    parser.add_argument("--base_image", type=str, help="base image path", default="mcr.microsoft.com/azureml/openmpi3.1.2-ubuntu18.04")
+    parser.add_argument("--base_image", type=str, help="base image path", default="mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu22.04")
     return parser.parse_args()
 
 def main():
