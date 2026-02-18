@@ -41,5 +41,5 @@ outputs:
   terraform_st_key:
     description: 'Terraform State Key'
 runs:
-  using: 'node16'
+  using: 'node20'
   main: 'index.js'
