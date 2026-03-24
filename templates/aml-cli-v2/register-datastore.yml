@@ -1,0 +1,96 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
+
+# Reusable template: Register or update an AML datastore backed by Azure Blob Storage
+# Dynamically queries the workspace's linked storage account and creates/updates the datastore
+# using identity-based authentication (managed identity, no access keys)
+
+parameters:
+- name: datastore_name
+  type: string
+  default: 'workspaceblobstore'
+- name: container_name
+  type: string
+  default: ''
+- name: storage_account_override
+  type: string
+  default: ''
+
+steps:
+  - task: AzureCLI@2
+    displayName: Register datastore (${{ parameters.datastore_name }})
+    continueOnError: true
+    inputs:
+      azureSubscription: $(ado_service_connection_rg)
+      scriptType: bash
+      workingDirectory: $(System.DefaultWorkingDirectory)
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -e
+
+        DATASTORE_NAME="${{ parameters.datastore_name }}"
+        CONTAINER_NAME="${{ parameters.container_name }}"
+        STORAGE_OVERRIDE="${{ parameters.storage_account_override }}"
+
+        # Get workspace details
+        WORKSPACE_NAME="$(aml_workspace)"
+        RESOURCE_GROUP="$(resource_group)"
+
+        echo "Workspace: $WORKSPACE_NAME"
+        echo "Resource Group: $RESOURCE_GROUP"
+
+        # Determine storage account: use override or query workspace
+        if [ -n "$STORAGE_OVERRIDE" ]; then
+          STORAGE_ACCOUNT="$STORAGE_OVERRIDE"
+          echo "Using overridden storage account: $STORAGE_ACCOUNT"
+        else
+          # Query workspace for its linked storage account
+          STORAGE_ID=$(az ml workspace show \
+            --name "$WORKSPACE_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query storage_account -o tsv)
+          STORAGE_ACCOUNT=$(echo "$STORAGE_ID" | rev | cut -d'/' -f1 | rev)
+          echo "Discovered storage account from workspace: $STORAGE_ACCOUNT"
+        fi
+
+        # If container not specified, check if datastore already exists to get its container
+        if [ -z "$CONTAINER_NAME" ]; then
+          EXISTING_CONTAINER=$(az ml datastore show \
+            --name "$DATASTORE_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --workspace-name "$WORKSPACE_NAME" \
+            --query container_name -o tsv 2>/dev/null || echo "")
+          if [ -n "$EXISTING_CONTAINER" ]; then
+            CONTAINER_NAME="$EXISTING_CONTAINER"
+            echo "Reusing existing container: $CONTAINER_NAME"
+          else
+            CONTAINER_NAME="azureml-blobstore-$(uuidgen | tr '[:upper:]' '[:lower:]')"
+            echo "Generated new container name: $CONTAINER_NAME"
+          fi
+        fi
+
+        echo "Storage Account: $STORAGE_ACCOUNT"
+        echo "Container: $CONTAINER_NAME"
+        echo "Datastore: $DATASTORE_NAME"
+
+        # Generate datastore YAML definition
+        DATASTORE_YAML=$(mktemp /tmp/datastore-XXXXXX.yml)
+        cat > "$DATASTORE_YAML" <<EOF
+        \$schema: https://azuremlschemas.azureedge.net/latest/azureBlob.schema.json
+        name: $DATASTORE_NAME
+        type: azure_blob
+        account_name: $STORAGE_ACCOUNT
+        container_name: $CONTAINER_NAME
+        credentials:
+          # Use identity-based auth (no account key)
+          type: environment
+        EOF
+
+        # Register/update the datastore
+        az ml datastore create \
+          --file "$DATASTORE_YAML" \
+          --resource-group "$RESOURCE_GROUP" \
+          --workspace-name "$WORKSPACE_NAME"
+
+        rm -f "$DATASTORE_YAML"
+        echo "Datastore '$DATASTORE_NAME' registered successfully"
