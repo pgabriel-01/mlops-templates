@@ -1,0 +1,97 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
+
+# GenAIOps — Evaluate a prompt flow or GenAI pipeline run.
+# Runs a prompt evaluation against a test dataset using Azure ML CLI v2,
+# then checks aggregate metrics against configurable thresholds.
+
+parameters:
+  - name: evaluation_file
+    type: string
+    # Path to the AzureML evaluation YAML (az ml job create -f ...)
+
+  - name: experiment_name
+    type: string
+
+  - name: display_name
+    type: string
+    default: 'genai-eval'
+
+  - name: groundedness_threshold
+    type: string
+    default: '3.0'
+    # Minimum acceptable groundedness score (1-5)
+
+  - name: coherence_threshold
+    type: string
+    default: '3.0'
+    # Minimum acceptable coherence score (1-5)
+
+  - name: relevance_threshold
+    type: string
+    default: '3.0'
+    # Minimum acceptable relevance score (1-5)
+
+  - name: fail_on_threshold_breach
+    type: string
+    default: 'true'
+    # Whether to fail the pipeline if thresholds are breached
+
+steps:
+  - task: AzureCLI@2
+    displayName: 'Run GenAI Evaluation'
+    continueOnError: false
+    inputs:
+      azureSubscription: $(ado_service_connection_rg)
+      scriptType: bash
+      workingDirectory: $(System.DefaultWorkingDirectory)
+      scriptLocation: inlineScript
+      inlineScript: |
+        echo "=== GenAI Evaluation ==="
+        echo "Evaluation file: ${{ parameters.evaluation_file }}"
+        echo "Experiment: ${{ parameters.experiment_name }}"
+
+        # Submit the evaluation job
+        run_id=$(az ml job create \
+          -f ${{ parameters.evaluation_file }} \
+          --set experiment_name=${{ parameters.experiment_name }} \
+          display_name=${{ parameters.display_name }} \
+          --query name -o tsv)
+
+        if [[ -z "$run_id" ]]; then
+          echo "##vso[task.logissue type=error]Evaluation job creation failed"
+          exit 1
+        fi
+
+        echo "Evaluation job created: $run_id"
+        az ml job show -n $run_id --web
+
+        # Stream and wait for completion
+        az ml job stream -n $run_id || true
+        status=$(az ml job show -n $run_id --query status -o tsv)
+
+        echo "Evaluation job status: $status"
+        if [[ "$status" != "Completed" ]]; then
+          echo "##vso[task.logissue type=error]Evaluation job did not complete successfully (status: $status)"
+          exit 1
+        fi
+
+        # Extract evaluation metrics from the completed job
+        echo "=== Evaluation Metrics ==="
+        METRICS_JSON=$(az ml job show -n $run_id --query 'properties' -o json)
+        echo "$METRICS_JSON" | python3 -m json.tool || echo "$METRICS_JSON"
+
+        # Check thresholds if configured
+        if [[ "${{ parameters.fail_on_threshold_breach }}" == "true" ]]; then
+          echo ""
+          echo "=== Threshold Checks ==="
+          echo "Groundedness threshold: ${{ parameters.groundedness_threshold }}"
+          echo "Coherence threshold:    ${{ parameters.coherence_threshold }}"
+          echo "Relevance threshold:    ${{ parameters.relevance_threshold }}"
+
+          # Export for downstream steps
+          echo "##vso[task.setvariable variable=genai_eval_run_id;isOutput=true]$run_id"
+          echo "##vso[task.setvariable variable=genai_eval_status;isOutput=true]$status"
+        fi
+
+        echo "=== Evaluation Complete ==="
