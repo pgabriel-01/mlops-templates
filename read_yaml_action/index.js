@@ -33,6 +33,19 @@ try {
     var terraform_st_container_name = String(configYaml["variables"]["terraform_st_container_name"]);
     var terraform_st_key = String(configYaml["variables"]["terraform_st_key"]);
 
+    // Networking, feature-flag, compute and tag variables (optional; sensible
+    // defaults when absent so older config files keep working). Values are kept
+    // as strings to preserve the config value (FAILSAFE_SCHEMA yields strings).
+    var enable_vnet = valueOrDefault(configYaml["variables"]["enable_vnet"], "false");
+    var vnet_address_prefix = valueOrDefault(configYaml["variables"]["vnet_address_prefix"], "10.0.0.0/16");
+    var default_subnet_prefix = valueOrDefault(configYaml["variables"]["default_subnet_prefix"], "10.0.0.0/24");
+    var compute_subnet_prefix = valueOrDefault(configYaml["variables"]["compute_subnet_prefix"], "10.0.1.0/24");
+    var pe_subnet_prefix = valueOrDefault(configYaml["variables"]["pe_subnet_prefix"], "10.0.2.0/24");
+    var enable_container_registry = valueOrDefault(configYaml["variables"]["enable_container_registry"], "true");
+    var aml_compute_sku = valueOrDefault(configYaml["variables"]["aml_compute_sku"], "Standard_DS3_v2");
+    var tag_cost_center = valueOrDefault(configYaml["variables"]["tag_cost_center"], "");
+    var tag_managed_by = valueOrDefault(configYaml["variables"]["tag_managed_by"], "bicep");
+
     if(checkGenerateEntity(terraform_st_location)){
       terraform_st_location = location;
     }
@@ -69,6 +82,15 @@ try {
     core.setOutput("terraform_st_storage_account", terraform_st_storage_account);
     core.setOutput("terraform_st_container_name", terraform_st_container_name);
     core.setOutput("terraform_st_key", terraform_st_key);
+    core.setOutput("enable_vnet", enable_vnet);
+    core.setOutput("vnet_address_prefix", vnet_address_prefix);
+    core.setOutput("default_subnet_prefix", default_subnet_prefix);
+    core.setOutput("compute_subnet_prefix", compute_subnet_prefix);
+    core.setOutput("pe_subnet_prefix", pe_subnet_prefix);
+    core.setOutput("enable_container_registry", enable_container_registry);
+    core.setOutput("aml_compute_sku", aml_compute_sku);
+    core.setOutput("tag_cost_center", tag_cost_center);
+    core.setOutput("tag_managed_by", tag_managed_by);
   });
   
 } catch (error) {
@@ -81,4 +103,10 @@ function checkGenerateEntity(entity){
         result = true;
     }
     return result;
+}
+function valueOrDefault(value, fallback){
+    if (value === undefined || value === null || String(value).trim() === ""){
+        return fallback;
+    }
+    return String(value);
 }

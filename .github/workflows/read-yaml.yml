@@ -58,6 +58,33 @@ on:
       terraform_st_key:
         description: "Terraform State Key"
         value: ${{ jobs.read-yaml.outputs.terraform_st_key }}
+      enable_vnet:
+        description: "Enable VNet + private endpoints"
+        value: ${{ jobs.read-yaml.outputs.enable_vnet }}
+      vnet_address_prefix:
+        description: "VNet address prefix"
+        value: ${{ jobs.read-yaml.outputs.vnet_address_prefix }}
+      default_subnet_prefix:
+        description: "Default subnet prefix"
+        value: ${{ jobs.read-yaml.outputs.default_subnet_prefix }}
+      compute_subnet_prefix:
+        description: "Compute subnet prefix"
+        value: ${{ jobs.read-yaml.outputs.compute_subnet_prefix }}
+      pe_subnet_prefix:
+        description: "Private-endpoints subnet prefix"
+        value: ${{ jobs.read-yaml.outputs.pe_subnet_prefix }}
+      enable_container_registry:
+        description: "Enable Azure Container Registry"
+        value: ${{ jobs.read-yaml.outputs.enable_container_registry }}
+      aml_compute_sku:
+        description: "AML compute cluster VM SKU"
+        value: ${{ jobs.read-yaml.outputs.aml_compute_sku }}
+      tag_cost_center:
+        description: "CostCenter tag value"
+        value: ${{ jobs.read-yaml.outputs.tag_cost_center }}
+      tag_managed_by:
+        description: "ManagedBy tag value"
+        value: ${{ jobs.read-yaml.outputs.tag_managed_by }}
 jobs:
   read-yaml:
     runs-on: ubuntu-latest
@@ -79,6 +106,15 @@ jobs:
       terraform_st_storage_account: ${{  steps.read_action_js.outputs.terraform_st_storage_account }}
       terraform_st_container_name: ${{  steps.read_action_js.outputs.terraform_st_container_name }}
       terraform_st_key: ${{  steps.read_action_js.outputs.terraform_st_key }}
+      enable_vnet: ${{  steps.read_action_js.outputs.enable_vnet }}
+      vnet_address_prefix: ${{  steps.read_action_js.outputs.vnet_address_prefix }}
+      default_subnet_prefix: ${{  steps.read_action_js.outputs.default_subnet_prefix }}
+      compute_subnet_prefix: ${{  steps.read_action_js.outputs.compute_subnet_prefix }}
+      pe_subnet_prefix: ${{  steps.read_action_js.outputs.pe_subnet_prefix }}
+      enable_container_registry: ${{  steps.read_action_js.outputs.enable_container_registry }}
+      aml_compute_sku: ${{  steps.read_action_js.outputs.aml_compute_sku }}
+      tag_cost_center: ${{  steps.read_action_js.outputs.tag_cost_center }}
+      tag_managed_by: ${{  steps.read_action_js.outputs.tag_managed_by }}
     steps:
       - name: Checking out calling repo
         uses: actions/checkout@v4

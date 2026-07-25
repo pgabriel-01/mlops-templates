@@ -40,6 +40,24 @@ outputs:
     description: "Terraform State Container name"
   terraform_st_key:
     description: 'Terraform State Key'
+  enable_vnet:
+    description: 'Boolean to enable VNet + private endpoints (network isolation)'
+  vnet_address_prefix:
+    description: 'Address prefix for the virtual network'
+  default_subnet_prefix:
+    description: 'Address prefix for the default subnet'
+  compute_subnet_prefix:
+    description: 'Address prefix for the AML compute subnet'
+  pe_subnet_prefix:
+    description: 'Address prefix for the private-endpoints subnet'
+  enable_container_registry:
+    description: 'Boolean to decide whether to deploy an Azure Container Registry'
+  aml_compute_sku:
+    description: 'VM SKU for the AML compute cluster'
+  tag_cost_center:
+    description: 'CostCenter tag value'
+  tag_managed_by:
+    description: 'ManagedBy tag value'
 runs:
   using: 'node16'
   main: 'index.js'
