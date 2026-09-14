@@ -7,7 +7,11 @@ parameters:
     default: '$(terraform_version)'
 
 steps:
-  - task: TerraformInstaller@1
-    displayName: 'Terraform install'
-    inputs:
+  - template: resolve-terraform-version.yml
+    parameters:
       terraformVersion: ${{ parameters.terraformVersion }}
+
+  - task: TerraformInstaller@1
+    displayName: Install Terraform $(terraformResolvedVersion)
+    inputs:
+      terraformVersion: $(terraformResolvedVersion)

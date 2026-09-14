@@ -25,10 +25,14 @@ parameters:
     default: '$(terraform_st_key)'
 
 steps:
-  - task: TerraformInstaller@1
-    displayName: 'Install Terraform'
-    inputs:
+  - template: resolve-terraform-version.yml
+    parameters:
       terraformVersion: ${{ parameters.terraformVersion }}
+
+  - task: TerraformInstaller@1
+    displayName: Install Terraform $(terraformResolvedVersion)
+    inputs:
+      terraformVersion: $(terraformResolvedVersion)
 
   - task: AzureCLI@2
     displayName: 'Terraform init'

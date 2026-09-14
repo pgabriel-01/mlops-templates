@@ -131,6 +131,8 @@ When `apply: true`, the root must expose:
 
 The apply task is named `terraformOutputs`; its output variables use the same names. It also sets the same-job compatibility variables `resource_group`, `aml_workspace`, `storage_account`, and `training_compute`.
 
+`terraformVersion` accepts `latest`, an exact semantic version such as `1.16.2`, or a stable-patch range such as `1.16.x`. The range form resolves at runtime from HashiCorp's official Terraform release index and sets `terraformResolvedVersion` before `TerraformInstaller@1` runs.
+
 ```yaml
 - template: templates/infra/terraform-state-bootstrap.yml@mlops-templates
   parameters:
@@ -145,7 +147,7 @@ The apply task is named `terraformOutputs`; its output variables use the same na
 - template: templates/infra/terraform-deploy.yml@mlops-templates
   parameters:
     azureServiceConnection: Azure-ARM-Dev
-    terraformVersion: 1.16.2
+    terraformVersion: 1.16.x
     workingDirectory: $(System.DefaultWorkingDirectory)/infrastructure/terraform
     backendResourceGroup: rg-taxi-dev-tf
     backendStorageAccount: sttaxidevtf
