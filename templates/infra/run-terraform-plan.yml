@@ -20,6 +20,15 @@ parameters:
   - name: environment
     type: string
     default: '$(environment)'
+  - name: includeProjectMetadata
+    type: boolean
+    default: false
+  - name: projectNumber
+    type: string
+    default: '001'
+  - name: cicdPrincipalObjectId
+    type: string
+    default: ''
   - name: enableAmlComputeCluster
     type: string
     default: '$(enable_aml_computecluster)'
@@ -51,7 +60,8 @@ steps:
         export ARM_SUBSCRIPTION_ID
         ARM_SUBSCRIPTION_ID="$(az account show --query id --output tsv)"
 
-        terraform plan -input=false \
+        terraform_args=(
+          -input=false
           -var "location=$TF_VAR_LOCATION" \
           -var "prefix=$TF_VAR_PREFIX" \
           -var "postfix=$TF_VAR_POSTFIX" \
@@ -60,11 +70,23 @@ steps:
           -var "aml_compute_sku=$TF_VAR_AML_COMPUTE_SKU" \
           -var "enable_monitoring=$TF_VAR_ENABLE_MONITORING" \
           -out="$TF_PLAN_FILE"
+        )
+        if [[ "$INCLUDE_PROJECT_METADATA" == "true" ]]; then
+          : "${TF_VAR_CICD_PRINCIPAL_OBJECT_ID:?cicdPrincipalObjectId is required when includeProjectMetadata is true}"
+          terraform_args+=(
+            -var "project_number=$TF_VAR_PROJECT_NUMBER"
+            -var "cicd_principal_object_id=$TF_VAR_CICD_PRINCIPAL_OBJECT_ID"
+          )
+        fi
+        terraform plan "${terraform_args[@]}"
     env:
       TF_VAR_LOCATION: ${{ parameters.location }}
       TF_VAR_PREFIX: ${{ parameters.prefix }}
       TF_VAR_POSTFIX: ${{ parameters.postfix }}
       TF_VAR_ENVIRONMENT: ${{ parameters.environment }}
+      INCLUDE_PROJECT_METADATA: ${{ parameters.includeProjectMetadata }}
+      TF_VAR_PROJECT_NUMBER: ${{ parameters.projectNumber }}
+      TF_VAR_CICD_PRINCIPAL_OBJECT_ID: ${{ parameters.cicdPrincipalObjectId }}
       TF_VAR_ENABLE_AML_COMPUTE: ${{ parameters.enableAmlComputeCluster }}
       TF_VAR_AML_COMPUTE_SKU: ${{ parameters.amlComputeSku }}
       TF_VAR_ENABLE_MONITORING: ${{ parameters.enableMonitoring }}

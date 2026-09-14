@@ -35,6 +35,11 @@ parameters:
   - name: environment
     type: string
     default: '$(environment)'
+  - name: projectNumber
+    type: string
+    default: '001'
+  - name: cicdPrincipalObjectId
+    type: string
   - name: enableAmlComputeCluster
     type: boolean
     default: true
@@ -86,6 +91,7 @@ steps:
         export ARM_TENANT_ID="$tenantId"
         export ARM_SUBSCRIPTION_ID
         ARM_SUBSCRIPTION_ID="$(az account show --query id --output tsv)"
+        : "${TF_VAR_CICD_PRINCIPAL_OBJECT_ID:?cicdPrincipalObjectId is required}"
 
         terraform init -input=false -reconfigure \
           -backend-config="storage_account_name=$TF_STATE_STORAGE_ACCOUNT" \
@@ -105,6 +111,8 @@ steps:
           -var "prefix=$TF_VAR_PREFIX" \
           -var "postfix=$TF_VAR_POSTFIX" \
           -var "environment=$TF_VAR_ENVIRONMENT" \
+          -var "project_number=$TF_VAR_PROJECT_NUMBER" \
+          -var "cicd_principal_object_id=$TF_VAR_CICD_PRINCIPAL_OBJECT_ID" \
           -var "enable_aml_computecluster=$TF_VAR_ENABLE_AML_COMPUTE" \
           -var "aml_compute_sku=$TF_VAR_AML_COMPUTE_SKU" \
           -var "enable_monitoring=$TF_VAR_ENABLE_MONITORING" \
@@ -123,6 +131,8 @@ steps:
       TF_VAR_PREFIX: ${{ parameters.prefix }}
       TF_VAR_POSTFIX: ${{ parameters.postfix }}
       TF_VAR_ENVIRONMENT: ${{ parameters.environment }}
+      TF_VAR_PROJECT_NUMBER: ${{ parameters.projectNumber }}
+      TF_VAR_CICD_PRINCIPAL_OBJECT_ID: ${{ parameters.cicdPrincipalObjectId }}
       TF_VAR_ENABLE_AML_COMPUTE: ${{ parameters.enableAmlComputeCluster }}
       TF_VAR_AML_COMPUTE_SKU: ${{ parameters.amlComputeSku }}
       TF_VAR_ENABLE_MONITORING: ${{ parameters.enableMonitoring }}

@@ -26,8 +26,10 @@ Required parameters:
 | `backendResourceGroup` | Terraform state resource group |
 | `backendStorageAccount` | Terraform state storage account |
 | `backendContainer` | Terraform state blob container |
+| `cicdPrincipalObjectId` | Entra service-principal object ID used for role assignment |
 
 The connection must be able to create the backend resources and role assignment. Role assignment creation requires Owner or User Access Administrator.
+`cicdPrincipalObjectId` is required because AzureCLI's `servicePrincipalId` is the application/client ID, while `--assignee-object-id` requires the Entra service-principal object ID.
 
 ## Composed deployment
 
@@ -39,6 +41,8 @@ The project Terraform root must accept:
 - `prefix`
 - `postfix`
 - `environment`
+- `project_number`
+- `cicd_principal_object_id`
 - `enable_aml_computecluster`
 - `aml_compute_sku`
 - `enable_monitoring`
@@ -64,6 +68,7 @@ The apply task is named `terraformOutputs`; its output variables use the same na
     backendResourceGroup: rg-taxi-dev-tf
     backendStorageAccount: sttaxidevtf
     backendContainer: default
+    cicdPrincipalObjectId: $(cicd_principal_object_id)
 
 - template: templates/infra/terraform-deploy.yml@mlops-templates
   parameters:
@@ -78,6 +83,8 @@ The apply task is named `terraformOutputs`; its output variables use the same na
     prefix: taxi
     postfix: '10001'
     environment: dev
+    projectNumber: '001'
+    cicdPrincipalObjectId: $(cicd_principal_object_id)
     enableAmlComputeCluster: true
     amlComputeSku: STANDARD_D2S_V3
     enableMonitoring: true
@@ -87,4 +94,6 @@ The apply task is named `terraformOutputs`; its output variables use the same na
     endpointsSubnetAddressPrefix: 10.0.2.0/24
 ```
 
-The lower-level templates remain available for compatibility. New consumers should use the composed templates.
+`cicdPrincipalObjectId` must be the Entra service-principal object ID, not the application/client ID exposed as `servicePrincipalId` by `AzureCLI@2`.
+
+The lower-level templates remain available for compatibility. `run-terraform-plan.yml` accepts the same `projectNumber` and `cicdPrincipalObjectId` values when `includeProjectMetadata: true`; the flag defaults to `false` so Terraform roots that do not declare those variables continue to work. New consumers should use the composed templates.

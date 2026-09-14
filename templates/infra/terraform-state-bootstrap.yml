@@ -17,6 +17,8 @@ parameters:
   - name: backendContainer
     type: string
     default: '$(terraform_st_container_name)'
+  - name: cicdPrincipalObjectId
+    type: string
 
 steps:
   - task: AzureCLI@2
@@ -60,20 +62,12 @@ steps:
           --query id \
           --output tsv)"
 
-        ROLE_COUNT="$(az role assignment list \
-          --assignee "$servicePrincipalId" \
+        az role assignment create \
+          --assignee-object-id "$CICD_PRINCIPAL_OBJECT_ID" \
+          --assignee-principal-type ServicePrincipal \
+          --role "Storage Blob Data Contributor" \
           --scope "$STORAGE_ACCOUNT_ID" \
-          --include-inherited \
-          --query "[?roleDefinitionName=='Storage Blob Data Contributor'] | length(@)" \
-          --output tsv)"
-        if [[ "$ROLE_COUNT" == "0" ]]; then
-          az role assignment create \
-            --assignee-object-id "$servicePrincipalId" \
-            --assignee-principal-type ServicePrincipal \
-            --role "Storage Blob Data Contributor" \
-            --scope "$STORAGE_ACCOUNT_ID" \
-            --output none
-        fi
+          --output none
 
         for attempt in {1..12}; do
           if az storage container create \
@@ -94,3 +88,4 @@ steps:
       TF_STATE_RESOURCE_GROUP: ${{ parameters.backendResourceGroup }}
       TF_STATE_STORAGE_ACCOUNT: ${{ parameters.backendStorageAccount }}
       TF_STATE_CONTAINER: ${{ parameters.backendContainer }}
+      CICD_PRINCIPAL_OBJECT_ID: ${{ parameters.cicdPrincipalObjectId }}
