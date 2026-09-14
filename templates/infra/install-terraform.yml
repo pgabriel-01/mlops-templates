@@ -7,7 +7,7 @@ parameters:
     default: '$(terraform_version)'
 
 steps:
-  - task: TerraformInstaller@0
+  - task: TerraformInstaller@1
     displayName: 'Terraform install'
     inputs:
       terraformVersion: ${{ parameters.terraformVersion }}
