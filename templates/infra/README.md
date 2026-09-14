@@ -145,7 +145,7 @@ The apply task is named `terraformOutputs`; its output variables use the same na
 - template: templates/infra/terraform-deploy.yml@mlops-templates
   parameters:
     azureServiceConnection: Azure-ARM-Dev
-    terraformVersion: 1.14.3
+    terraformVersion: 1.16.2
     workingDirectory: $(System.DefaultWorkingDirectory)/infrastructure/terraform
     backendResourceGroup: rg-taxi-dev-tf
     backendStorageAccount: sttaxidevtf
