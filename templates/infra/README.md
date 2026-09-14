@@ -1,6 +1,22 @@
 # Azure DevOps Terraform templates
 
-Use an immutable repository ref when consuming these templates:
+Generated platform bootstrap pipelines may default to `main` while exposing the ref as a compile-time parameter:
+
+```yaml
+parameters:
+  - name: templatesRef
+    type: string
+    default: refs/heads/main
+
+resources:
+  repositories:
+    - repository: mlops-templates
+      type: git
+      name: mlops-templates
+      ref: ${{ parameters.templatesRef }}
+```
+
+Release pipelines should use an immutable repository ref:
 
 ```yaml
 resources:
@@ -15,7 +31,7 @@ During integration, pin an exact commit SHA until a release tag is available.
 
 ## State bootstrap
 
-`terraform-state-bootstrap.yml` creates or verifies the Azure Storage backend and grants the workload identity `Storage Blob Data Contributor`.
+`terraform-state-bootstrap.yml` creates or verifies the Azure Storage backend and creates the blob container through the Azure Resource Manager management plane. It makes no Blob data-plane call during bootstrap.
 
 Required parameters:
 
@@ -26,10 +42,65 @@ Required parameters:
 | `backendResourceGroup` | Terraform state resource group |
 | `backendStorageAccount` | Terraform state storage account |
 | `backendContainer` | Terraform state blob container |
-| `cicdPrincipalObjectId` | Entra service-principal object ID used for role assignment |
+| `allowPublicNetworkAccess` | Enables or disables the storage public endpoint; defaults to `true` |
+| `cicdPrincipalObjectId` | Optional Entra service-principal object ID granted Storage Blob Data Contributor |
+| `roleAssignmentPropagationDelaySeconds` | Delay after creating a new data-plane role assignment; defaults to `60` |
 
-The connection must be able to create the backend resources and role assignment. Role assignment creation requires Owner or User Access Administrator.
-`cicdPrincipalObjectId` is required because AzureCLI's `servicePrincipalId` is the application/client ID, while `--assignee-object-id` requires the Entra service-principal object ID.
+The connection needs Azure Resource Manager permission to create the resource group, storage account, `blobServices/containers` child resource, and optional role assignment. Shared-key access is disabled, HTTPS is required, and the minimum TLS version is 1.2. Container creation uses the ARM management plane; bootstrap does not call the Blob data plane.
+
+## Managed DevOps platform bootstrap
+
+`bicep/managed-devops-platform.bicep` deploys a dedicated Managed DevOps Pool and keyless Terraform state backend. `managed-devops-platform.yml` is its direct Azure DevOps wrapper. `platform-bootstrap.yml` selects DEV, Test, or Prod service-connection and CI/CD principal inputs without hardcoding live IDs.
+
+Private mode, the default, creates:
+
+- a VNet with a subnet delegated to `Microsoft.DevOpsInfrastructure/pools`
+- a separate private-endpoint subnet
+- the `privatelink.blob.core.windows.net` private DNS zone and VNet link
+- a Blob private endpoint and DNS zone group
+- state storage with shared keys disabled, OAuth-compatible authorization, HTTPS-only, TLS 1.2, and public access disabled
+- Reader and Network Contributor assignments for the `DevOpsInfrastructure` service principal on the VNet
+- Storage Blob Data Contributor for the selected environment CI/CD principal
+
+Public mode is explicit with `networkMode: public`. It omits the VNet/private endpoint/DNS resources and enables the storage public endpoint while retaining keyless authentication.
+
+The bootstrap pipeline runs on an existing Microsoft-hosted or bootstrap agent. After it succeeds, later stages or pipelines use the emitted `agent_pool_name`.
+
+The wrapper checks out the `mlops-templates` repository resource to `s/mlops-templates` so the Bicep asset is available. Override `templateRepository`, `templateCheckoutPath`, and `templateFile` together when the repository alias or checkout layout differs.
+
+```yaml
+- template: templates/infra/platform-bootstrap.yml@mlops-templates
+  parameters:
+    environment: dev
+    devAzureServiceConnection: Azure-ARM-Dev
+    testAzureServiceConnection: Azure-ARM-Test
+    prodAzureServiceConnection: Azure-ARM-Prod
+    devCicdPrincipalObjectId: $(dev_cicd_principal_object_id)
+    testCicdPrincipalObjectId: $(test_cicd_principal_object_id)
+    prodCicdPrincipalObjectId: $(prod_cicd_principal_object_id)
+    devOpsInfrastructurePrincipalObjectId: $(devops_infrastructure_principal_object_id)
+    location: eastus2
+    resourceGroup: rg-mlops-platform-dev
+    networkMode: private
+    virtualNetworkName: vnet-mlops-platform-dev
+    stateStorageAccountName: stmlopsplatformdev
+    managedDevOpsPoolName: mdp-mlops-dev
+    managedDevOpsPoolAlias: mlops-private-dev
+    devCenterProjectResourceId: $(dev_center_project_resource_id)
+```
+
+The VNet and pool must use the same region. The delegated subnet is exclusive to one Managed DevOps Pool and must not use `172.17.0.0/16`, which the service reserves for internal operations.
+
+`azureDevOpsOrganizationUrl` and `azureDevOpsProjectName` default to `$(System.CollectionUri)` and `$(System.TeamProjectId)` respectively, so pipelines do not commit organization or project identifiers.
+
+Private deployment ordering:
+
+1. Run `platform-bootstrap.yml` on an existing Microsoft-hosted or bootstrap pool.
+2. Wait for the Managed DevOps Pool to be available in the selected Azure DevOps project.
+3. Queue Terraform and AML stages with `pool.name` set to the configured pool alias.
+4. Use `terraform-deploy.yml`; its Azure AD backend access resolves through the Blob private endpoint and private DNS zone.
+
+`devCenterProjectResourceId` refers to an existing Dev Center project in the same region. The bootstrap identity must be able to register `Microsoft.DevOpsInfrastructure`, deploy resources, and create role assignments.
 
 ## Composed deployment
 
@@ -69,6 +140,7 @@ The apply task is named `terraformOutputs`; its output variables use the same na
     backendStorageAccount: sttaxidevtf
     backendContainer: default
     cicdPrincipalObjectId: $(cicd_principal_object_id)
+    allowPublicNetworkAccess: true
 
 - template: templates/infra/terraform-deploy.yml@mlops-templates
   parameters:

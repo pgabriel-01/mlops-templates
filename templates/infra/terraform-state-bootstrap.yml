@@ -19,6 +19,13 @@ parameters:
     default: '$(terraform_st_container_name)'
   - name: cicdPrincipalObjectId
     type: string
+    default: ''
+  - name: roleAssignmentPropagationDelaySeconds
+    type: number
+    default: 60
+  - name: allowPublicNetworkAccess
+    type: boolean
+    default: true
 
 steps:
   - task: AzureCLI@2
@@ -26,7 +33,6 @@ steps:
     inputs:
       azureSubscription: ${{ parameters.azureServiceConnection }}
       scriptType: bash
-      addSpnToEnvironment: true
       scriptLocation: inlineScript
       inlineScript: |
         set -euo pipefail
@@ -38,6 +44,14 @@ steps:
             --output none
         fi
 
+        if [[ "$ALLOW_PUBLIC_NETWORK_ACCESS" == "true" ]]; then
+          PUBLIC_NETWORK_ACCESS="Enabled"
+          DEFAULT_ACTION="Allow"
+        else
+          PUBLIC_NETWORK_ACCESS="Disabled"
+          DEFAULT_ACTION="Deny"
+        fi
+
         if ! az storage account show \
           --name "$TF_STATE_STORAGE_ACCOUNT" \
           --resource-group "$TF_STATE_RESOURCE_GROUP" >/dev/null 2>&1; then
@@ -47,12 +61,20 @@ steps:
             --location "$TF_STATE_LOCATION" \
             --sku Standard_LRS \
             --allow-shared-key-access false \
+            --https-only true \
+            --min-tls-version TLS1_2 \
+            --public-network-access "$PUBLIC_NETWORK_ACCESS" \
+            --default-action "$DEFAULT_ACTION" \
             --output none
         else
           az storage account update \
             --name "$TF_STATE_STORAGE_ACCOUNT" \
             --resource-group "$TF_STATE_RESOURCE_GROUP" \
             --allow-shared-key-access false \
+            --https-only true \
+            --min-tls-version TLS1_2 \
+            --public-network-access "$PUBLIC_NETWORK_ACCESS" \
+            --default-action "$DEFAULT_ACTION" \
             --output none
         fi
 
@@ -62,30 +84,33 @@ steps:
           --query id \
           --output tsv)"
 
-        az role assignment create \
-          --assignee-object-id "$CICD_PRINCIPAL_OBJECT_ID" \
-          --assignee-principal-type ServicePrincipal \
-          --role "Storage Blob Data Contributor" \
-          --scope "$STORAGE_ACCOUNT_ID" \
-          --output none
+        if [[ -n "$CICD_PRINCIPAL_OBJECT_ID" ]]; then
+          ROLE_ASSIGNMENT_ID="$(az role assignment list \
+            --scope "$STORAGE_ACCOUNT_ID" \
+            --role "Storage Blob Data Contributor" \
+            --query "[?principalId=='$CICD_PRINCIPAL_OBJECT_ID'] | [0].id" \
+            --output tsv)"
+          if [[ -z "$ROLE_ASSIGNMENT_ID" ]]; then
+            az role assignment create \
+              --assignee-object-id "$CICD_PRINCIPAL_OBJECT_ID" \
+              --assignee-principal-type ServicePrincipal \
+              --role "Storage Blob Data Contributor" \
+              --scope "$STORAGE_ACCOUNT_ID" \
+              --output none
+            sleep "$ROLE_ASSIGNMENT_PROPAGATION_DELAY_SECONDS"
+          fi
+        fi
 
-        for attempt in {1..12}; do
-          if az storage container create \
-            --name "$TF_STATE_CONTAINER" \
-            --account-name "$TF_STATE_STORAGE_ACCOUNT" \
-            --auth-mode login \
-            --output none; then
-            exit 0
-          fi
-          if [[ "$attempt" == "12" ]]; then
-            echo "Blob data-plane access was not available after waiting for role propagation." >&2
-            exit 1
-          fi
-          sleep 10
-        done
+        az rest \
+          --method put \
+          --url "https://management.azure.com${STORAGE_ACCOUNT_ID}/blobServices/default/containers/${TF_STATE_CONTAINER}?api-version=2023-05-01" \
+          --body '{"properties":{"publicAccess":"None"}}' \
+          --output none
     env:
       TF_STATE_LOCATION: ${{ parameters.location }}
       TF_STATE_RESOURCE_GROUP: ${{ parameters.backendResourceGroup }}
       TF_STATE_STORAGE_ACCOUNT: ${{ parameters.backendStorageAccount }}
       TF_STATE_CONTAINER: ${{ parameters.backendContainer }}
       CICD_PRINCIPAL_OBJECT_ID: ${{ parameters.cicdPrincipalObjectId }}
+      ROLE_ASSIGNMENT_PROPAGATION_DELAY_SECONDS: ${{ parameters.roleAssignmentPropagationDelaySeconds }}
+      ALLOW_PUBLIC_NETWORK_ACCESS: ${{ parameters.allowPublicNetworkAccess }}
