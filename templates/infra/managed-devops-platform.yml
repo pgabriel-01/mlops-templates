@@ -127,8 +127,11 @@ steps:
         echo "##vso[task.setvariable variable=agent_pool_name]$MANAGED_DEVOPS_POOL_ALIAS"
         echo "##vso[task.setvariable variable=agent_pool_name;isOutput=true]$MANAGED_DEVOPS_POOL_ALIAS"
         echo "##vso[task.setvariable variable=terraform_st_resource_group]$PLATFORM_RESOURCE_GROUP"
+        echo "##vso[task.setvariable variable=terraform_st_resource_group;isOutput=true]$PLATFORM_RESOURCE_GROUP"
         echo "##vso[task.setvariable variable=terraform_st_storage_account]$STATE_STORAGE_ACCOUNT_NAME"
+        echo "##vso[task.setvariable variable=terraform_st_storage_account;isOutput=true]$STATE_STORAGE_ACCOUNT_NAME"
         echo "##vso[task.setvariable variable=terraform_st_container_name]$STATE_CONTAINER_NAME"
+        echo "##vso[task.setvariable variable=terraform_st_container_name;isOutput=true]$STATE_CONTAINER_NAME"
     env:
       TEMPLATE_FILE: ${{ parameters.templateFile }}
       PLATFORM_LOCATION: ${{ parameters.location }}

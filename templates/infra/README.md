@@ -64,7 +64,7 @@ Private mode, the default, creates:
 
 Public mode is explicit with `networkMode: public`. It omits the VNet/private endpoint/DNS resources and enables the storage public endpoint while retaining keyless authentication.
 
-The bootstrap pipeline runs on an existing Microsoft-hosted or bootstrap agent. After it succeeds, later stages or pipelines use the emitted `agent_pool_name`.
+The bootstrap pipeline runs on an existing Microsoft-hosted or bootstrap agent. After it succeeds, later stages or pipelines use the emitted `agent_pool_name`, `terraform_st_resource_group`, `terraform_st_storage_account`, and `terraform_st_container_name` values. Cross-job references use the task name `managedDevOpsPlatform`.
 
 The wrapper checks out the `mlops-templates` repository resource to `s/mlops-templates` so the Bicep asset is available. Override `templateRepository`, `templateCheckoutPath`, and `templateFile` together when the repository alias or checkout layout differs.
 
