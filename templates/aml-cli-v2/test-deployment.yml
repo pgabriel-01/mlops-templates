@@ -2,53 +2,78 @@
 # Licensed under the MIT License.
 
 parameters:
+  - name: azure_service_connection
+    type: string
+    default: '$(ado_service_connection_aml_ws)'
+  - name: resource_group
+    type: string
+    default: '$(resource_group)'
+  - name: workspace_name
+    type: string
+    default: '$(aml_workspace)'
+  - name: endpoint_type
+    type: string
+    default: '$(endpoint_type)'
+  - name: endpoint_name
+    type: string
+    default: '$(endpoint_name)'
+  - name: working_directory
+    type: string
+    default: '$(System.DefaultWorkingDirectory)'
   - name: deployment_name
     type: string
   - name: sample_request
     type: string
   - name: request_type
     type: string
-
-
 steps:
   - task: AzureCLI@2
     displayName: Test deployment
-    inputs: 
-      azureSubscription: $(ado_service_connection_rg) #needs to have access at the RG level 
+    inputs:
+      azureSubscription: ${{ parameters.azure_service_connection }}
       scriptType: bash
-      workingDirectory: $(System.DefaultWorkingDirectory)
+      workingDirectory: ${{ parameters.working_directory }}
       scriptLocation: inlineScript
       inlineScript: |
-        set -e
-        RESPONSE=$(az ml $(endpoint_type)-endpoint invoke -n $(endpoint_name) --deployment-name ${{ parameters.deployment_name }} --request-file ${{ parameters.sample_request }})
-        echo $RESPONSE
-    condition: and(succeeded(), eq(variables['endpoint_type'], 'online'))
-    
-  - task: AzureCLI@2
-    displayName: Test deployment
-    inputs: 
-      azureSubscription: $(ado_service_connection_rg) #needs to have access at the RG level 
-      scriptType: bash
-      workingDirectory: $(System.DefaultWorkingDirectory)
-      scriptLocation: inlineScript
-      inlineScript: |
-        set -e
-        JOB_NAME=$(az ml $(endpoint_type)-endpoint invoke --name $(endpoint_name) --deployment-name ${{ parameters.deployment_name }} --input ${{ parameters.sample_request }} --input-type ${{ parameters.request_type }} --query name -o tsv)
-        az ml job show -n $JOB_NAME --web
-        az ml job stream -n $JOB_NAME
-
-        STATUS=$(az ml job show -n $JOB_NAME --query status -o tsv)
-        echo $STATUS
-        if [[ $STATUS == "Completed" ]]
-        then
-          echo "Job completed"
-        elif [[ $STATUS ==  "Failed" ]]
-        then
-          echo "Job failed"
-          exit 1
-        else 
-          echo "Job status not failed or completed"
+        set -euo pipefail
+        if [[ "$ENDPOINT_TYPE" == "online" ]]; then
+          az ml online-endpoint invoke \
+            --name "$ENDPOINT_NAME" \
+            --deployment-name "$DEPLOYMENT_NAME" \
+            --request-file "$SAMPLE_REQUEST" \
+            --resource-group "$RESOURCE_GROUP" \
+            --workspace-name "$WORKSPACE_NAME"
+        elif [[ "$ENDPOINT_TYPE" == "batch" ]]; then
+          job_name="$(az ml batch-endpoint invoke \
+            --name "$ENDPOINT_NAME" \
+            --deployment-name "$DEPLOYMENT_NAME" \
+            --input "$SAMPLE_REQUEST" \
+            --input-type "$REQUEST_TYPE" \
+            --resource-group "$RESOURCE_GROUP" \
+            --workspace-name "$WORKSPACE_NAME" \
+            --query name \
+            --output tsv)"
+          test -n "$job_name"
+          az ml job stream \
+            --name "$job_name" \
+            --resource-group "$RESOURCE_GROUP" \
+            --workspace-name "$WORKSPACE_NAME"
+          status="$(az ml job show \
+            --name "$job_name" \
+            --resource-group "$RESOURCE_GROUP" \
+            --workspace-name "$WORKSPACE_NAME" \
+            --query status \
+            --output tsv)"
+          [[ "$status" == "Completed" ]]
+        else
+          echo "Unsupported endpoint type '$ENDPOINT_TYPE'." >&2
           exit 2
         fi
-    condition: and(succeeded(), eq(variables['endpoint_type'], 'batch'))
-
+    env:
+      ENDPOINT_TYPE: ${{ parameters.endpoint_type }}
+      ENDPOINT_NAME: ${{ parameters.endpoint_name }}
+      DEPLOYMENT_NAME: ${{ parameters.deployment_name }}
+      SAMPLE_REQUEST: ${{ parameters.sample_request }}
+      REQUEST_TYPE: ${{ parameters.request_type }}
+      RESOURCE_GROUP: ${{ parameters.resource_group }}
+      WORKSPACE_NAME: ${{ parameters.workspace_name }}

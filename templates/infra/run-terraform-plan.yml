@@ -1,29 +1,71 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
 
+parameters:
+  - name: azureServiceConnection
+    type: string
+    default: '$(ado_service_connection_rg)'
+  - name: workingDirectory
+    type: string
+    default: '$(System.DefaultWorkingDirectory)/$(terraform_workingdir)'
+  - name: location
+    type: string
+    default: '$(location)'
+  - name: prefix
+    type: string
+    default: '$(namespace)'
+  - name: postfix
+    type: string
+    default: '$(postfix)'
+  - name: environment
+    type: string
+    default: '$(environment)'
+  - name: enableAmlComputeCluster
+    type: string
+    default: '$(enable_aml_computecluster)'
+  - name: amlComputeSku
+    type: string
+    default: '$(aml_compute_sku)'
+  - name: enableMonitoring
+    type: string
+    default: '$(enable_monitoring)'
+  - name: planFile
+    type: string
+    default: tfplan
+
 steps:
   - task: AzureCLI@2
     displayName: 'Terraform plan'
     inputs:
-      azureSubscription: '$(ado_service_connection_rg)'
+      azureSubscription: ${{ parameters.azureServiceConnection }}
       scriptType: 'bash'
       addSpnToEnvironment: true
-      workingDirectory: '$(System.DefaultWorkingDirectory)/$(terraform_workingdir)'
+      workingDirectory: ${{ parameters.workingDirectory }}
       scriptLocation: 'inlineScript'
       inlineScript: |
-        # Use Workload Identity Federation (OIDC) for Terraform authentication
+        set -euo pipefail
         export ARM_USE_OIDC=true
-        export ARM_OIDC_TOKEN=$idToken
-        export ARM_CLIENT_ID=$servicePrincipalId
-        export ARM_TENANT_ID=$tenantId
-        export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-        
-        terraform plan \
-          -var "location=$(location)" \
-          -var "prefix=$(namespace)" \
-          -var "postfix=$(postfix)" \
-          -var "environment=$(environment)" \
-          -var "enable_aml_computecluster=$(enable_aml_computecluster)" \
-          -var "aml_compute_sku=$(aml_compute_sku)" \
-          -var "enable_monitoring=$(enable_monitoring)" \
-          -out=tfplan
+        export ARM_OIDC_TOKEN="$idToken"
+        export ARM_CLIENT_ID="$servicePrincipalId"
+        export ARM_TENANT_ID="$tenantId"
+        export ARM_SUBSCRIPTION_ID
+        ARM_SUBSCRIPTION_ID="$(az account show --query id --output tsv)"
+
+        terraform plan -input=false \
+          -var "location=$TF_VAR_LOCATION" \
+          -var "prefix=$TF_VAR_PREFIX" \
+          -var "postfix=$TF_VAR_POSTFIX" \
+          -var "environment=$TF_VAR_ENVIRONMENT" \
+          -var "enable_aml_computecluster=$TF_VAR_ENABLE_AML_COMPUTE" \
+          -var "aml_compute_sku=$TF_VAR_AML_COMPUTE_SKU" \
+          -var "enable_monitoring=$TF_VAR_ENABLE_MONITORING" \
+          -out="$TF_PLAN_FILE"
+    env:
+      TF_VAR_LOCATION: ${{ parameters.location }}
+      TF_VAR_PREFIX: ${{ parameters.prefix }}
+      TF_VAR_POSTFIX: ${{ parameters.postfix }}
+      TF_VAR_ENVIRONMENT: ${{ parameters.environment }}
+      TF_VAR_ENABLE_AML_COMPUTE: ${{ parameters.enableAmlComputeCluster }}
+      TF_VAR_AML_COMPUTE_SKU: ${{ parameters.amlComputeSku }}
+      TF_VAR_ENABLE_MONITORING: ${{ parameters.enableMonitoring }}
+      TF_PLAN_FILE: ${{ parameters.planFile }}

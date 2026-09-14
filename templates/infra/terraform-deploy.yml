@@ -1,0 +1,170 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
+
+parameters:
+  - name: azureServiceConnection
+    type: string
+    default: '$(ado_service_connection_rg)'
+  - name: terraformVersion
+    type: string
+    default: '$(terraform_version)'
+  - name: workingDirectory
+    type: string
+    default: '$(System.DefaultWorkingDirectory)/$(terraform_workingdir)'
+  - name: backendResourceGroup
+    type: string
+    default: '$(terraform_st_resource_group)'
+  - name: backendStorageAccount
+    type: string
+    default: '$(terraform_st_storage_account)'
+  - name: backendContainer
+    type: string
+    default: '$(terraform_st_container_name)'
+  - name: backendKey
+    type: string
+    default: '$(terraform_st_key)'
+  - name: location
+    type: string
+    default: '$(location)'
+  - name: prefix
+    type: string
+    default: '$(namespace)'
+  - name: postfix
+    type: string
+    default: '$(postfix)'
+  - name: environment
+    type: string
+    default: '$(environment)'
+  - name: enableAmlComputeCluster
+    type: boolean
+    default: true
+  - name: amlComputeSku
+    type: string
+    default: '$(aml_compute_sku)'
+  - name: enableMonitoring
+    type: boolean
+    default: false
+  - name: enablePrivateEndpoints
+    type: boolean
+    default: false
+  - name: vnetAddressSpace
+    type: string
+    default: '10.0.0.0/16'
+  - name: trainingSubnetAddressPrefix
+    type: string
+    default: '10.0.1.0/24'
+  - name: endpointsSubnetAddressPrefix
+    type: string
+    default: '10.0.2.0/24'
+  - name: planFile
+    type: string
+    default: tfplan
+  - name: apply
+    type: boolean
+    default: true
+
+steps:
+  - task: TerraformInstaller@0
+    displayName: Install Terraform ${{ parameters.terraformVersion }}
+    inputs:
+      terraformVersion: ${{ parameters.terraformVersion }}
+
+  - task: AzureCLI@2
+    displayName: Terraform init, validate, and plan
+    inputs:
+      azureSubscription: ${{ parameters.azureServiceConnection }}
+      scriptType: bash
+      addSpnToEnvironment: true
+      workingDirectory: ${{ parameters.workingDirectory }}
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+
+        export ARM_USE_OIDC=true
+        export ARM_OIDC_TOKEN="$idToken"
+        export ARM_CLIENT_ID="$servicePrincipalId"
+        export ARM_TENANT_ID="$tenantId"
+        export ARM_SUBSCRIPTION_ID
+        ARM_SUBSCRIPTION_ID="$(az account show --query id --output tsv)"
+
+        terraform init -input=false -reconfigure \
+          -backend-config="storage_account_name=$TF_STATE_STORAGE_ACCOUNT" \
+          -backend-config="container_name=$TF_STATE_CONTAINER" \
+          -backend-config="key=$TF_STATE_KEY" \
+          -backend-config="resource_group_name=$TF_STATE_RESOURCE_GROUP" \
+          -backend-config="subscription_id=$ARM_SUBSCRIPTION_ID" \
+          -backend-config="tenant_id=$ARM_TENANT_ID" \
+          -backend-config="client_id=$ARM_CLIENT_ID" \
+          -backend-config="use_oidc=true" \
+          -backend-config="use_azuread_auth=true"
+
+        terraform fmt -check -recursive
+        terraform validate
+        terraform plan -input=false \
+          -var "location=$TF_VAR_LOCATION" \
+          -var "prefix=$TF_VAR_PREFIX" \
+          -var "postfix=$TF_VAR_POSTFIX" \
+          -var "environment=$TF_VAR_ENVIRONMENT" \
+          -var "enable_aml_computecluster=$TF_VAR_ENABLE_AML_COMPUTE" \
+          -var "aml_compute_sku=$TF_VAR_AML_COMPUTE_SKU" \
+          -var "enable_monitoring=$TF_VAR_ENABLE_MONITORING" \
+          -var "enable_private_endpoints=$TF_VAR_ENABLE_PRIVATE_ENDPOINTS" \
+          -var "vnet_address_space=$TF_VAR_VNET_ADDRESS_SPACE" \
+          -var "training_subnet_address_prefix=$TF_VAR_TRAINING_SUBNET_PREFIX" \
+          -var "endpoints_subnet_address_prefix=$TF_VAR_ENDPOINTS_SUBNET_PREFIX" \
+          -out="$TF_PLAN_FILE"
+    env:
+      TF_STATE_RESOURCE_GROUP: ${{ parameters.backendResourceGroup }}
+      TF_STATE_STORAGE_ACCOUNT: ${{ parameters.backendStorageAccount }}
+      TF_STATE_CONTAINER: ${{ parameters.backendContainer }}
+      TF_STATE_KEY: ${{ parameters.backendKey }}
+      TF_PLAN_FILE: ${{ parameters.planFile }}
+      TF_VAR_LOCATION: ${{ parameters.location }}
+      TF_VAR_PREFIX: ${{ parameters.prefix }}
+      TF_VAR_POSTFIX: ${{ parameters.postfix }}
+      TF_VAR_ENVIRONMENT: ${{ parameters.environment }}
+      TF_VAR_ENABLE_AML_COMPUTE: ${{ parameters.enableAmlComputeCluster }}
+      TF_VAR_AML_COMPUTE_SKU: ${{ parameters.amlComputeSku }}
+      TF_VAR_ENABLE_MONITORING: ${{ parameters.enableMonitoring }}
+      TF_VAR_ENABLE_PRIVATE_ENDPOINTS: ${{ parameters.enablePrivateEndpoints }}
+      TF_VAR_VNET_ADDRESS_SPACE: ${{ parameters.vnetAddressSpace }}
+      TF_VAR_TRAINING_SUBNET_PREFIX: ${{ parameters.trainingSubnetAddressPrefix }}
+      TF_VAR_ENDPOINTS_SUBNET_PREFIX: ${{ parameters.endpointsSubnetAddressPrefix }}
+
+  - ${{ if eq(parameters.apply, true) }}:
+      - task: AzureCLI@2
+        name: terraformOutputs
+        displayName: Terraform apply saved plan
+        inputs:
+          azureSubscription: ${{ parameters.azureServiceConnection }}
+          scriptType: bash
+          addSpnToEnvironment: true
+          workingDirectory: ${{ parameters.workingDirectory }}
+          scriptLocation: inlineScript
+          inlineScript: |
+            set -euo pipefail
+
+            export ARM_USE_OIDC=true
+            export ARM_OIDC_TOKEN="$idToken"
+            export ARM_CLIENT_ID="$servicePrincipalId"
+            export ARM_TENANT_ID="$tenantId"
+            export ARM_SUBSCRIPTION_ID
+            ARM_SUBSCRIPTION_ID="$(az account show --query id --output tsv)"
+
+            terraform apply -input=false -auto-approve "$TF_PLAN_FILE"
+
+            RESOURCE_GROUP_NAME="$(terraform output -raw resource_group_name)"
+            AML_WORKSPACE_NAME="$(terraform output -raw aml_workspace_name)"
+            STORAGE_ACCOUNT_NAME="$(terraform output -raw storage_account_name)"
+            TRAINING_COMPUTE_NAME="$(terraform output -raw training_compute_name)"
+
+            echo "##vso[task.setvariable variable=resource_group]$RESOURCE_GROUP_NAME"
+            echo "##vso[task.setvariable variable=aml_workspace]$AML_WORKSPACE_NAME"
+            echo "##vso[task.setvariable variable=storage_account]$STORAGE_ACCOUNT_NAME"
+            echo "##vso[task.setvariable variable=training_compute]$TRAINING_COMPUTE_NAME"
+            echo "##vso[task.setvariable variable=resource_group_name;isOutput=true]$RESOURCE_GROUP_NAME"
+            echo "##vso[task.setvariable variable=aml_workspace_name;isOutput=true]$AML_WORKSPACE_NAME"
+            echo "##vso[task.setvariable variable=storage_account_name;isOutput=true]$STORAGE_ACCOUNT_NAME"
+            echo "##vso[task.setvariable variable=training_compute_name;isOutput=true]$TRAINING_COMPUTE_NAME"
+        env:
+          TF_PLAN_FILE: ${{ parameters.planFile }}

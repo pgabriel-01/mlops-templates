@@ -1,25 +1,55 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
 
-parameters: 
-- name: endpoint_file
-  type: string
+parameters:
+  - name: azure_service_connection
+    type: string
+    default: '$(ado_service_connection_aml_ws)'
+  - name: resource_group
+    type: string
+    default: '$(resource_group)'
+  - name: workspace_name
+    type: string
+    default: '$(aml_workspace)'
+  - name: endpoint_type
+    type: string
+    default: '$(endpoint_type)'
+  - name: endpoint_name
+    type: string
+    default: '$(endpoint_name)'
+  - name: endpoint_file
+    type: string
 
 steps:
   - task: AzureCLI@2
-    displayName: Create online/batch endpoint 
-    continueOnError: true
-    inputs: 
-      azureSubscription: $(ado_service_connection_rg) #needs to have access at the RG level 
+    displayName: Create online/batch endpoint
+    inputs:
+      azureSubscription: ${{ parameters.azure_service_connection }}
       scriptType: bash
       scriptLocation: inlineScript
       inlineScript: |
-        ENDPOINT_EXISTS=$(az ml $(endpoint_type)-endpoint list -o tsv --query "[?name=='$(endpoint_name)'][name]" | wc -l)
-        echo $ENDPOINT_NAME $ENDPOINT_EXISTS
-        az ml $(endpoint_type)-endpoint list -o tsv
-
-        if [[ ENDPOINT_EXISTS -ne 1 ]]; then
-            az ml $(endpoint_type)-endpoint create --name $(endpoint_name) -f ${{ parameters.endpoint_file }}
+        set -euo pipefail
+        if az ml "$ENDPOINT_TYPE-endpoint" show \
+          --name "$ENDPOINT_NAME" \
+          --resource-group "$RESOURCE_GROUP" \
+          --workspace-name "$WORKSPACE_NAME" >/dev/null 2>&1; then
+          az ml "$ENDPOINT_TYPE-endpoint" update \
+            --name "$ENDPOINT_NAME" \
+            --file "$ENDPOINT_FILE" \
+            --resource-group "$RESOURCE_GROUP" \
+            --workspace-name "$WORKSPACE_NAME" \
+            --output none
         else
-            echo "Endpoint exists"
+          az ml "$ENDPOINT_TYPE-endpoint" create \
+            --name "$ENDPOINT_NAME" \
+            --file "$ENDPOINT_FILE" \
+            --resource-group "$RESOURCE_GROUP" \
+            --workspace-name "$WORKSPACE_NAME" \
+            --output none
         fi
+    env:
+      ENDPOINT_TYPE: ${{ parameters.endpoint_type }}
+      ENDPOINT_NAME: ${{ parameters.endpoint_name }}
+      ENDPOINT_FILE: ${{ parameters.endpoint_file }}
+      RESOURCE_GROUP: ${{ parameters.resource_group }}
+      WORKSPACE_NAME: ${{ parameters.workspace_name }}

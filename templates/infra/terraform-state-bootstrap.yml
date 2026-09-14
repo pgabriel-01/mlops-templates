@@ -1,0 +1,96 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
+
+parameters:
+  - name: azureServiceConnection
+    type: string
+    default: '$(ado_service_connection_rg)'
+  - name: location
+    type: string
+    default: '$(location)'
+  - name: backendResourceGroup
+    type: string
+    default: '$(terraform_st_resource_group)'
+  - name: backendStorageAccount
+    type: string
+    default: '$(terraform_st_storage_account)'
+  - name: backendContainer
+    type: string
+    default: '$(terraform_st_container_name)'
+
+steps:
+  - task: AzureCLI@2
+    displayName: Bootstrap Terraform state
+    inputs:
+      azureSubscription: ${{ parameters.azureServiceConnection }}
+      scriptType: bash
+      addSpnToEnvironment: true
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+
+        if ! az group show --name "$TF_STATE_RESOURCE_GROUP" >/dev/null 2>&1; then
+          az group create \
+            --name "$TF_STATE_RESOURCE_GROUP" \
+            --location "$TF_STATE_LOCATION" \
+            --output none
+        fi
+
+        if ! az storage account show \
+          --name "$TF_STATE_STORAGE_ACCOUNT" \
+          --resource-group "$TF_STATE_RESOURCE_GROUP" >/dev/null 2>&1; then
+          az storage account create \
+            --name "$TF_STATE_STORAGE_ACCOUNT" \
+            --resource-group "$TF_STATE_RESOURCE_GROUP" \
+            --location "$TF_STATE_LOCATION" \
+            --sku Standard_LRS \
+            --allow-shared-key-access false \
+            --output none
+        else
+          az storage account update \
+            --name "$TF_STATE_STORAGE_ACCOUNT" \
+            --resource-group "$TF_STATE_RESOURCE_GROUP" \
+            --allow-shared-key-access false \
+            --output none
+        fi
+
+        STORAGE_ACCOUNT_ID="$(az storage account show \
+          --name "$TF_STATE_STORAGE_ACCOUNT" \
+          --resource-group "$TF_STATE_RESOURCE_GROUP" \
+          --query id \
+          --output tsv)"
+
+        ROLE_COUNT="$(az role assignment list \
+          --assignee "$servicePrincipalId" \
+          --scope "$STORAGE_ACCOUNT_ID" \
+          --include-inherited \
+          --query "[?roleDefinitionName=='Storage Blob Data Contributor'] | length(@)" \
+          --output tsv)"
+        if [[ "$ROLE_COUNT" == "0" ]]; then
+          az role assignment create \
+            --assignee-object-id "$servicePrincipalId" \
+            --assignee-principal-type ServicePrincipal \
+            --role "Storage Blob Data Contributor" \
+            --scope "$STORAGE_ACCOUNT_ID" \
+            --output none
+        fi
+
+        for attempt in {1..12}; do
+          if az storage container create \
+            --name "$TF_STATE_CONTAINER" \
+            --account-name "$TF_STATE_STORAGE_ACCOUNT" \
+            --auth-mode login \
+            --output none; then
+            exit 0
+          fi
+          if [[ "$attempt" == "12" ]]; then
+            echo "Blob data-plane access was not available after waiting for role propagation." >&2
+            exit 1
+          fi
+          sleep 10
+        done
+    env:
+      TF_STATE_LOCATION: ${{ parameters.location }}
+      TF_STATE_RESOURCE_GROUP: ${{ parameters.backendResourceGroup }}
+      TF_STATE_STORAGE_ACCOUNT: ${{ parameters.backendStorageAccount }}
+      TF_STATE_CONTAINER: ${{ parameters.backendContainer }}
