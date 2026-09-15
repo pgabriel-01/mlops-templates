@@ -36,6 +36,8 @@ steps:
       scriptLocation: inlineScript
       inlineScript: |
         set -euo pipefail
+        export AZURE_STORAGE_AUTH_MODE=login
+
         if [[ "$ENDPOINT_TYPE" == "online" ]]; then
           az ml online-endpoint invoke \
             --name "$ENDPOINT_NAME" \
