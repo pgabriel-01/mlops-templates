@@ -1,11 +1,27 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
 
+parameters:
+  - name: azureServiceConnection
+    type: string
+    default: '$(ado_service_connection_rg)'
+  - name: location
+    type: string
+    default: '$(location)'
+  - name: resourceGroup
+    type: string
+    default: '$(terraform_st_resource_group)'
+
 steps:
   - task: AzureCLI@2
     displayName: 'Create Resource Group'
     inputs:
-      azureSubscription: '$(ado_service_connection_rg)'
+      azureSubscription: ${{ parameters.azureServiceConnection }}
       scriptType: 'bash'
       scriptLocation: 'inlineScript'
-      inlineScript: 'az group create --location $(location) --name $(terraform_st_resource_group)'
+      inlineScript: |
+        set -euo pipefail
+        az group create --location "$LOCATION" --name "$RESOURCE_GROUP" --output none
+    env:
+      LOCATION: ${{ parameters.location }}
+      RESOURCE_GROUP: ${{ parameters.resourceGroup }}

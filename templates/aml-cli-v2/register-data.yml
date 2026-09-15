@@ -2,23 +2,46 @@
 # Licensed under the MIT License.
 
 parameters:
-- name: data_type
-  type: string
-- name: data_name
-  type: string
-- name: data_file
-  type: string
+  - name: azure_service_connection
+    type: string
+    default: '$(ado_service_connection_aml_ws)'
+  - name: resource_group
+    type: string
+    default: '$(resource_group)'
+  - name: workspace_name
+    type: string
+    default: '$(aml_workspace)'
+  - name: working_directory
+    type: string
+    default: '$(System.DefaultWorkingDirectory)'
+  - name: data_type
+    type: string
+  - name: data_name
+    type: string
+  - name: data_file
+    type: string
 
 steps:
   - task: AzureCLI@2
     displayName: Register Azure ML data asset
-    continueOnError: true
-    inputs: 
-      azureSubscription: $(ado_service_connection_rg) #needs to have access at the RG level 
+    inputs:
+      azureSubscription: ${{ parameters.azure_service_connection }}
       scriptType: bash
-      workingDirectory: $(System.DefaultWorkingDirectory)
+      workingDirectory: ${{ parameters.working_directory }}
       scriptLocation: inlineScript
       inlineScript: |
-        # Use Entra ID authentication instead of storage account keys
+        set -euo pipefail
         export AZURE_STORAGE_AUTH_MODE=login
-        az ml data create --file ${{ parameters.data_file }} --name ${{ parameters.data_name }} --type ${{ parameters.data_type }}
+        az ml data create \
+          --file "$DATA_FILE" \
+          --name "$DATA_NAME" \
+          --type "$DATA_TYPE" \
+          --resource-group "$RESOURCE_GROUP" \
+          --workspace-name "$WORKSPACE_NAME" \
+          --output none
+    env:
+      DATA_TYPE: ${{ parameters.data_type }}
+      DATA_NAME: ${{ parameters.data_name }}
+      DATA_FILE: ${{ parameters.data_file }}
+      RESOURCE_GROUP: ${{ parameters.resource_group }}
+      WORKSPACE_NAME: ${{ parameters.workspace_name }}

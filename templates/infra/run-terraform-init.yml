@@ -1,36 +1,68 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
 
+parameters:
+  - name: azureServiceConnection
+    type: string
+    default: '$(ado_service_connection_rg)'
+  - name: terraformVersion
+    type: string
+    default: '$(terraform_version)'
+  - name: workingDirectory
+    type: string
+    default: '$(System.DefaultWorkingDirectory)/$(terraform_workingdir)'
+  - name: backendResourceGroup
+    type: string
+    default: '$(terraform_st_resource_group)'
+  - name: backendStorageAccount
+    type: string
+    default: '$(terraform_st_storage_account)'
+  - name: backendContainer
+    type: string
+    default: '$(terraform_st_container_name)'
+  - name: backendKey
+    type: string
+    default: '$(terraform_st_key)'
+
 steps:
-  - task: TerraformInstaller@0
-    displayName: 'Install Terraform'
+  - template: resolve-terraform-version.yml
+    parameters:
+      terraformVersion: ${{ parameters.terraformVersion }}
+
+  - task: TerraformInstaller@1
+    displayName: Install Terraform
     inputs:
-      terraformVersion: 'latest'
-  
+      terraformVersion: $(terraformResolvedVersion)
+
   - task: AzureCLI@2
     displayName: 'Terraform init'
     inputs:
-      azureSubscription: '$(ado_service_connection_rg)'
+      azureSubscription: ${{ parameters.azureServiceConnection }}
       scriptType: 'bash'
       addSpnToEnvironment: true
-      workingDirectory: '$(System.DefaultWorkingDirectory)/$(terraform_workingdir)'
+      workingDirectory: ${{ parameters.workingDirectory }}
       scriptLocation: 'inlineScript'
       inlineScript: |
-        # Use Workload Identity Federation (OIDC) for Terraform authentication
+        set -euo pipefail
         export ARM_USE_OIDC=true
-        export ARM_OIDC_TOKEN=$idToken
-        export ARM_CLIENT_ID=$servicePrincipalId
-        export ARM_TENANT_ID=$tenantId
-        export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-        
-        # Run terraform init with azurerm backend using OIDC
-        terraform init \
-          -backend-config="storage_account_name=$(terraform_st_storage_account)" \
-          -backend-config="container_name=$(terraform_st_container_name)" \
-          -backend-config="key=$(terraform_st_key)" \
-          -backend-config="resource_group_name=$(terraform_st_resource_group)" \
+        export ARM_OIDC_TOKEN="$idToken"
+        export ARM_CLIENT_ID="$servicePrincipalId"
+        export ARM_TENANT_ID="$tenantId"
+        export ARM_SUBSCRIPTION_ID
+        ARM_SUBSCRIPTION_ID="$(az account show --query id --output tsv)"
+
+        terraform init -input=false -reconfigure \
+          -backend-config="storage_account_name=$TF_STATE_STORAGE_ACCOUNT" \
+          -backend-config="container_name=$TF_STATE_CONTAINER" \
+          -backend-config="key=$TF_STATE_KEY" \
+          -backend-config="resource_group_name=$TF_STATE_RESOURCE_GROUP" \
           -backend-config="subscription_id=$ARM_SUBSCRIPTION_ID" \
           -backend-config="tenant_id=$ARM_TENANT_ID" \
           -backend-config="client_id=$ARM_CLIENT_ID" \
           -backend-config="use_oidc=true" \
           -backend-config="use_azuread_auth=true"
+    env:
+      TF_STATE_RESOURCE_GROUP: ${{ parameters.backendResourceGroup }}
+      TF_STATE_STORAGE_ACCOUNT: ${{ parameters.backendStorageAccount }}
+      TF_STATE_CONTAINER: ${{ parameters.backendContainer }}
+      TF_STATE_KEY: ${{ parameters.backendKey }}

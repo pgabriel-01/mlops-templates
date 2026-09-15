@@ -1,0 +1,182 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
+
+parameters:
+  - name: environment
+    type: string
+    default: dev
+    values:
+      - dev
+      - test
+      - prod
+  - name: devAzureServiceConnection
+    type: string
+    default: ''
+  - name: testAzureServiceConnection
+    type: string
+    default: ''
+  - name: prodAzureServiceConnection
+    type: string
+    default: ''
+  - name: devCicdPrincipalObjectId
+    type: string
+    default: ''
+  - name: testCicdPrincipalObjectId
+    type: string
+    default: ''
+  - name: prodCicdPrincipalObjectId
+    type: string
+    default: ''
+  - name: devOpsInfrastructurePrincipalObjectId
+    type: string
+  - name: templateRepository
+    type: string
+    default: mlops-templates
+  - name: templateCheckoutPath
+    type: string
+    default: s/mlops-templates
+  - name: templateFile
+    type: string
+    default: '$(Pipeline.Workspace)/s/mlops-templates/templates/infra/bicep/managed-devops-platform.bicep'
+  - name: location
+    type: string
+  - name: resourceGroup
+    type: string
+  - name: networkMode
+    type: string
+    default: private
+    values:
+      - public
+      - private
+  - name: virtualNetworkName
+    type: string
+  - name: virtualNetworkAddressPrefix
+    type: string
+    default: 10.20.0.0/16
+  - name: managedPoolSubnetName
+    type: string
+    default: snet-managed-devops
+  - name: managedPoolSubnetPrefix
+    type: string
+    default: 10.20.1.0/24
+  - name: privateEndpointSubnetName
+    type: string
+    default: snet-private-endpoints
+  - name: privateEndpointSubnetPrefix
+    type: string
+    default: 10.20.2.0/24
+  - name: stateStorageAccountName
+    type: string
+  - name: stateContainerName
+    type: string
+    default: default
+  - name: managedDevOpsPoolName
+    type: string
+  - name: managedDevOpsPoolAlias
+    type: string
+  - name: managedDevOpsPoolSku
+    type: string
+    default: Standard_D2ads_v5
+  - name: managedDevOpsPoolImage
+    type: string
+    default: ubuntu-24.04
+  - name: maximumConcurrency
+    type: number
+    default: 2
+  - name: devCenterProjectResourceId
+    type: string
+  - name: azureDevOpsOrganizationUrl
+    type: string
+    default: '$(System.CollectionUri)'
+  - name: azureDevOpsProjectName
+    type: string
+    default: '$(System.TeamProjectId)'
+
+steps:
+  - ${{ if eq(parameters.environment, 'dev') }}:
+      - template: managed-devops-platform.yml
+        parameters:
+          azureServiceConnection: ${{ parameters.devAzureServiceConnection }}
+          cicdPrincipalObjectId: ${{ parameters.devCicdPrincipalObjectId }}
+          templateRepository: ${{ parameters.templateRepository }}
+          templateCheckoutPath: ${{ parameters.templateCheckoutPath }}
+          templateFile: ${{ parameters.templateFile }}
+          location: ${{ parameters.location }}
+          resourceGroup: ${{ parameters.resourceGroup }}
+          deploymentName: managed-devops-platform-dev
+          networkMode: ${{ parameters.networkMode }}
+          virtualNetworkName: ${{ parameters.virtualNetworkName }}
+          virtualNetworkAddressPrefix: ${{ parameters.virtualNetworkAddressPrefix }}
+          managedPoolSubnetName: ${{ parameters.managedPoolSubnetName }}
+          managedPoolSubnetPrefix: ${{ parameters.managedPoolSubnetPrefix }}
+          privateEndpointSubnetName: ${{ parameters.privateEndpointSubnetName }}
+          privateEndpointSubnetPrefix: ${{ parameters.privateEndpointSubnetPrefix }}
+          stateStorageAccountName: ${{ parameters.stateStorageAccountName }}
+          stateContainerName: ${{ parameters.stateContainerName }}
+          managedDevOpsPoolName: ${{ parameters.managedDevOpsPoolName }}
+          managedDevOpsPoolAlias: ${{ parameters.managedDevOpsPoolAlias }}
+          managedDevOpsPoolSku: ${{ parameters.managedDevOpsPoolSku }}
+          managedDevOpsPoolImage: ${{ parameters.managedDevOpsPoolImage }}
+          maximumConcurrency: ${{ parameters.maximumConcurrency }}
+          devCenterProjectResourceId: ${{ parameters.devCenterProjectResourceId }}
+          azureDevOpsOrganizationUrl: ${{ parameters.azureDevOpsOrganizationUrl }}
+          azureDevOpsProjectName: ${{ parameters.azureDevOpsProjectName }}
+          devOpsInfrastructurePrincipalObjectId: ${{ parameters.devOpsInfrastructurePrincipalObjectId }}
+  - ${{ if eq(parameters.environment, 'test') }}:
+      - template: managed-devops-platform.yml
+        parameters:
+          azureServiceConnection: ${{ parameters.testAzureServiceConnection }}
+          cicdPrincipalObjectId: ${{ parameters.testCicdPrincipalObjectId }}
+          templateRepository: ${{ parameters.templateRepository }}
+          templateCheckoutPath: ${{ parameters.templateCheckoutPath }}
+          templateFile: ${{ parameters.templateFile }}
+          location: ${{ parameters.location }}
+          resourceGroup: ${{ parameters.resourceGroup }}
+          deploymentName: managed-devops-platform-test
+          networkMode: ${{ parameters.networkMode }}
+          virtualNetworkName: ${{ parameters.virtualNetworkName }}
+          virtualNetworkAddressPrefix: ${{ parameters.virtualNetworkAddressPrefix }}
+          managedPoolSubnetName: ${{ parameters.managedPoolSubnetName }}
+          managedPoolSubnetPrefix: ${{ parameters.managedPoolSubnetPrefix }}
+          privateEndpointSubnetName: ${{ parameters.privateEndpointSubnetName }}
+          privateEndpointSubnetPrefix: ${{ parameters.privateEndpointSubnetPrefix }}
+          stateStorageAccountName: ${{ parameters.stateStorageAccountName }}
+          stateContainerName: ${{ parameters.stateContainerName }}
+          managedDevOpsPoolName: ${{ parameters.managedDevOpsPoolName }}
+          managedDevOpsPoolAlias: ${{ parameters.managedDevOpsPoolAlias }}
+          managedDevOpsPoolSku: ${{ parameters.managedDevOpsPoolSku }}
+          managedDevOpsPoolImage: ${{ parameters.managedDevOpsPoolImage }}
+          maximumConcurrency: ${{ parameters.maximumConcurrency }}
+          devCenterProjectResourceId: ${{ parameters.devCenterProjectResourceId }}
+          azureDevOpsOrganizationUrl: ${{ parameters.azureDevOpsOrganizationUrl }}
+          azureDevOpsProjectName: ${{ parameters.azureDevOpsProjectName }}
+          devOpsInfrastructurePrincipalObjectId: ${{ parameters.devOpsInfrastructurePrincipalObjectId }}
+  - ${{ if eq(parameters.environment, 'prod') }}:
+      - template: managed-devops-platform.yml
+        parameters:
+          azureServiceConnection: ${{ parameters.prodAzureServiceConnection }}
+          cicdPrincipalObjectId: ${{ parameters.prodCicdPrincipalObjectId }}
+          templateRepository: ${{ parameters.templateRepository }}
+          templateCheckoutPath: ${{ parameters.templateCheckoutPath }}
+          templateFile: ${{ parameters.templateFile }}
+          location: ${{ parameters.location }}
+          resourceGroup: ${{ parameters.resourceGroup }}
+          deploymentName: managed-devops-platform-prod
+          networkMode: ${{ parameters.networkMode }}
+          virtualNetworkName: ${{ parameters.virtualNetworkName }}
+          virtualNetworkAddressPrefix: ${{ parameters.virtualNetworkAddressPrefix }}
+          managedPoolSubnetName: ${{ parameters.managedPoolSubnetName }}
+          managedPoolSubnetPrefix: ${{ parameters.managedPoolSubnetPrefix }}
+          privateEndpointSubnetName: ${{ parameters.privateEndpointSubnetName }}
+          privateEndpointSubnetPrefix: ${{ parameters.privateEndpointSubnetPrefix }}
+          stateStorageAccountName: ${{ parameters.stateStorageAccountName }}
+          stateContainerName: ${{ parameters.stateContainerName }}
+          managedDevOpsPoolName: ${{ parameters.managedDevOpsPoolName }}
+          managedDevOpsPoolAlias: ${{ parameters.managedDevOpsPoolAlias }}
+          managedDevOpsPoolSku: ${{ parameters.managedDevOpsPoolSku }}
+          managedDevOpsPoolImage: ${{ parameters.managedDevOpsPoolImage }}
+          maximumConcurrency: ${{ parameters.maximumConcurrency }}
+          devCenterProjectResourceId: ${{ parameters.devCenterProjectResourceId }}
+          azureDevOpsOrganizationUrl: ${{ parameters.azureDevOpsOrganizationUrl }}
+          azureDevOpsProjectName: ${{ parameters.azureDevOpsProjectName }}
+          devOpsInfrastructurePrincipalObjectId: ${{ parameters.devOpsInfrastructurePrincipalObjectId }}

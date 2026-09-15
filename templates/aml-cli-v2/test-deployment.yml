@@ -2,53 +2,158 @@
 # Licensed under the MIT License.
 
 parameters:
+  - name: azure_service_connection
+    type: string
+    default: '$(ado_service_connection_aml_ws)'
+  - name: resource_group
+    type: string
+    default: '$(resource_group)'
+  - name: workspace_name
+    type: string
+    default: '$(aml_workspace)'
+  - name: endpoint_type
+    type: string
+    default: '$(endpoint_type)'
+  - name: endpoint_name
+    type: string
+    default: '$(endpoint_name)'
+  - name: working_directory
+    type: string
+    default: '$(System.DefaultWorkingDirectory)'
   - name: deployment_name
     type: string
   - name: sample_request
     type: string
   - name: request_type
     type: string
-
-
 steps:
   - task: AzureCLI@2
     displayName: Test deployment
-    inputs: 
-      azureSubscription: $(ado_service_connection_rg) #needs to have access at the RG level 
+    inputs:
+      azureSubscription: ${{ parameters.azure_service_connection }}
       scriptType: bash
-      workingDirectory: $(System.DefaultWorkingDirectory)
+      workingDirectory: ${{ parameters.working_directory }}
       scriptLocation: inlineScript
       inlineScript: |
-        set -e
-        RESPONSE=$(az ml $(endpoint_type)-endpoint invoke -n $(endpoint_name) --deployment-name ${{ parameters.deployment_name }} --request-file ${{ parameters.sample_request }})
-        echo $RESPONSE
-    condition: and(succeeded(), eq(variables['endpoint_type'], 'online'))
-    
-  - task: AzureCLI@2
-    displayName: Test deployment
-    inputs: 
-      azureSubscription: $(ado_service_connection_rg) #needs to have access at the RG level 
-      scriptType: bash
-      workingDirectory: $(System.DefaultWorkingDirectory)
-      scriptLocation: inlineScript
-      inlineScript: |
-        set -e
-        JOB_NAME=$(az ml $(endpoint_type)-endpoint invoke --name $(endpoint_name) --deployment-name ${{ parameters.deployment_name }} --input ${{ parameters.sample_request }} --input-type ${{ parameters.request_type }} --query name -o tsv)
-        az ml job show -n $JOB_NAME --web
-        az ml job stream -n $JOB_NAME
+        set -euo pipefail
+        export AZURE_STORAGE_AUTH_MODE=login
 
-        STATUS=$(az ml job show -n $JOB_NAME --query status -o tsv)
-        echo $STATUS
-        if [[ $STATUS == "Completed" ]]
-        then
-          echo "Job completed"
-        elif [[ $STATUS ==  "Failed" ]]
-        then
-          echo "Job failed"
-          exit 1
-        else 
-          echo "Job status not failed or completed"
+        print_safe_log() {
+          local log_file="$1"
+
+          echo "===== ${log_file} ====="
+          sed -E \
+            -e 's/([?&]sig=)[^&[:space:]]+/\1[REDACTED]/Ig' \
+            -e 's/(Authorization:[[:space:]]*Bearer[[:space:]]+)[^[:space:]]+/\1[REDACTED]/Ig' \
+            -e 's/((client_secret|account_key|password)[=:][[:space:]]*)[^[:space:]]+/\1[REDACTED]/Ig' \
+            "$log_file"
+        }
+
+        download_job_logs() {
+          local target_job="$1"
+          local download_path="$2"
+          local found_log=false
+
+          mkdir -p "$download_path"
+          echo "Downloading diagnostic logs for Azure ML job '$target_job'."
+          if ! az ml job download \
+            --name "$target_job" \
+            --resource-group "$RESOURCE_GROUP" \
+            --workspace-name "$WORKSPACE_NAME" \
+            --all \
+            --download-path "$download_path" \
+            --output none; then
+            echo "##vso[task.logissue type=warning]Unable to download logs for Azure ML job '$target_job'."
+            return
+          fi
+
+          while IFS= read -r log_file; do
+            found_log=true
+            print_safe_log "$log_file"
+          done < <(
+            find "$download_path" -type f \
+              \( -path '*/user_logs/std_log_0.txt' -o -iname 'job_result*.txt' -o -iname '*error*.log' -o -iname '*error*.txt' \) \
+              -print |
+              sort
+          )
+
+          if [[ "$found_log" == "false" ]]; then
+            echo "##vso[task.logissue type=warning]No user_logs/std_log_0.txt, job result, or error log was found for Azure ML job '$target_job'."
+          fi
+        }
+
+        if [[ "$ENDPOINT_TYPE" == "online" ]]; then
+          az ml online-endpoint invoke \
+            --name "$ENDPOINT_NAME" \
+            --deployment-name "$DEPLOYMENT_NAME" \
+            --request-file "$SAMPLE_REQUEST" \
+            --resource-group "$RESOURCE_GROUP" \
+            --workspace-name "$WORKSPACE_NAME"
+        elif [[ "$ENDPOINT_TYPE" == "batch" ]]; then
+          job_name="$(az ml batch-endpoint invoke \
+            --name "$ENDPOINT_NAME" \
+            --deployment-name "$DEPLOYMENT_NAME" \
+            --input "$SAMPLE_REQUEST" \
+            --input-type "$REQUEST_TYPE" \
+            --resource-group "$RESOURCE_GROUP" \
+            --workspace-name "$WORKSPACE_NAME" \
+            --query name \
+            --output tsv)"
+          test -n "$job_name"
+          stream_failed=false
+          if ! az ml job stream \
+            --name "$job_name" \
+            --resource-group "$RESOURCE_GROUP" \
+            --workspace-name "$WORKSPACE_NAME"; then
+            stream_failed=true
+          fi
+          status="Unknown"
+          if ! status="$(az ml job show \
+            --name "$job_name" \
+            --resource-group "$RESOURCE_GROUP" \
+            --workspace-name "$WORKSPACE_NAME" \
+            --query status \
+            --output tsv)"; then
+            echo "##vso[task.logissue type=warning]Unable to query final status for batch job '$job_name'."
+          fi
+          if [[ "$stream_failed" == "true" || "$status" != "Completed" ]]; then
+            echo "##vso[task.logissue type=error]Batch job '$job_name' finished with status '$status'."
+            diagnostic_root="$(mktemp -d)"
+            trap 'rm -rf "$diagnostic_root"' EXIT
+
+            failed_child_jobs=""
+            if ! failed_child_jobs="$(az ml job list \
+                --parent-job-name "$job_name" \
+                --resource-group "$RESOURCE_GROUP" \
+                --workspace-name "$WORKSPACE_NAME" \
+                --query "[?status!='Completed'].name" \
+                --output tsv)"; then
+              echo "##vso[task.logissue type=warning]Unable to list child jobs for batch job '$job_name'."
+            fi
+
+            if [[ -z "$failed_child_jobs" ]]; then
+              failed_child_jobs="$job_name"
+            fi
+
+            job_index=0
+            while IFS= read -r failed_job; do
+              if [[ -n "$failed_job" ]]; then
+                job_index=$((job_index + 1))
+                download_job_logs "$failed_job" "$diagnostic_root/job-$job_index"
+              fi
+            done <<< "$failed_child_jobs"
+
+            exit 1
+          fi
+        else
+          echo "Unsupported endpoint type '$ENDPOINT_TYPE'." >&2
           exit 2
         fi
-    condition: and(succeeded(), eq(variables['endpoint_type'], 'batch'))
-
+    env:
+      ENDPOINT_TYPE: ${{ parameters.endpoint_type }}
+      ENDPOINT_NAME: ${{ parameters.endpoint_name }}
+      DEPLOYMENT_NAME: ${{ parameters.deployment_name }}
+      SAMPLE_REQUEST: ${{ parameters.sample_request }}
+      REQUEST_TYPE: ${{ parameters.request_type }}
+      RESOURCE_GROUP: ${{ parameters.resource_group }}
+      WORKSPACE_NAME: ${{ parameters.workspace_name }}
