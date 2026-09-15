@@ -74,7 +74,7 @@ steps:
       terraformVersion: ${{ parameters.terraformVersion }}
 
   - task: TerraformInstaller@1
-    displayName: Install Terraform $(terraformResolvedVersion)
+    displayName: Install Terraform
     inputs:
       terraformVersion: $(terraformResolvedVersion)
 
