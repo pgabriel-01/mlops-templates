@@ -12,7 +12,7 @@ resources:
   repositories:
     - repository: mlops-templates
       type: git
-      name: mlops-templates
+      name: <ADO_PROJECT>/<TEMPLATES_REPOSITORY>
       ref: ${{ parameters.templatesRef }}
 ```
 
@@ -23,11 +23,11 @@ resources:
   repositories:
     - repository: mlops-templates
       type: git
-      name: mlops-templates
+      name: <ADO_PROJECT>/<TEMPLATES_REPOSITORY>
       ref: refs/tags/v1.0.0
 ```
 
-During integration, pin an exact commit SHA until a release tag is available.
+Replace the repository placeholder with the configured Azure DevOps project and repository. During integration, pin an exact commit SHA until a release tag is available.
 
 ## State bootstrap
 
@@ -72,20 +72,20 @@ The wrapper checks out the `mlops-templates` repository resource to `s/mlops-tem
 - template: templates/infra/platform-bootstrap.yml@mlops-templates
   parameters:
     environment: dev
-    devAzureServiceConnection: Azure-ARM-Dev
-    testAzureServiceConnection: Azure-ARM-Test
-    prodAzureServiceConnection: Azure-ARM-Prod
+    devAzureServiceConnection: $(dev_azure_service_connection)
+    testAzureServiceConnection: $(test_azure_service_connection)
+    prodAzureServiceConnection: $(prod_azure_service_connection)
     devCicdPrincipalObjectId: $(dev_cicd_principal_object_id)
     testCicdPrincipalObjectId: $(test_cicd_principal_object_id)
     prodCicdPrincipalObjectId: $(prod_cicd_principal_object_id)
     devOpsInfrastructurePrincipalObjectId: $(devops_infrastructure_principal_object_id)
-    location: eastus2
-    resourceGroup: rg-mlops-platform-dev
+    location: $(platform_location)
+    resourceGroup: $(platform_resource_group)
     networkMode: private
-    virtualNetworkName: vnet-mlops-platform-dev
-    stateStorageAccountName: stmlopsplatformdev
-    managedDevOpsPoolName: mdp-mlops-dev
-    managedDevOpsPoolAlias: mlops-private-dev
+    virtualNetworkName: $(platform_virtual_network_name)
+    stateStorageAccountName: $(terraform_st_storage_account)
+    managedDevOpsPoolName: $(managed_devops_pool_name)
+    managedDevOpsPoolAlias: $(managed_devops_pool_alias)
     devCenterProjectResourceId: $(dev_center_project_resource_id)
 ```
 
@@ -136,31 +136,31 @@ The apply task is named `terraformOutputs`; its output variables use the same na
 ```yaml
 - template: templates/infra/terraform-state-bootstrap.yml@mlops-templates
   parameters:
-    azureServiceConnection: Azure-ARM-Dev
-    location: eastus2
-    backendResourceGroup: rg-taxi-dev-tf
-    backendStorageAccount: sttaxidevtf
-    backendContainer: default
+    azureServiceConnection: $(ado_service_connection_rg)
+    location: $(location)
+    backendResourceGroup: $(terraform_st_resource_group)
+    backendStorageAccount: $(terraform_st_storage_account)
+    backendContainer: $(terraform_st_container_name)
     cicdPrincipalObjectId: $(cicd_principal_object_id)
     allowPublicNetworkAccess: true
 
 - template: templates/infra/terraform-deploy.yml@mlops-templates
   parameters:
-    azureServiceConnection: Azure-ARM-Dev
+    azureServiceConnection: $(ado_service_connection_rg)
     terraformVersion: 1.16.x
     workingDirectory: $(System.DefaultWorkingDirectory)/infrastructure/terraform
-    backendResourceGroup: rg-taxi-dev-tf
-    backendStorageAccount: sttaxidevtf
-    backendContainer: default
-    backendKey: classical-dev.tfstate
-    location: eastus2
-    prefix: taxi
-    postfix: '10001'
-    environment: dev
-    projectNumber: '001'
+    backendResourceGroup: $(terraform_st_resource_group)
+    backendStorageAccount: $(terraform_st_storage_account)
+    backendContainer: $(terraform_st_container_name)
+    backendKey: $(terraform_st_key)
+    location: $(location)
+    prefix: $(namespace)
+    postfix: $(postfix)
+    environment: $(environment)
+    projectNumber: $(project_number)
     cicdPrincipalObjectId: $(cicd_principal_object_id)
     enableAmlComputeCluster: true
-    amlComputeSku: STANDARD_D2S_V3
+    amlComputeSku: $(aml_compute_sku)
     enableMonitoring: true
     enablePrivateEndpoints: false
     vnetAddressSpace: 10.0.0.0/16

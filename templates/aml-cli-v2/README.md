@@ -22,7 +22,7 @@ Defaults preserve the legacy pipeline variables, but new consumers should pass e
 ```yaml
 - template: templates/aml-cli-v2/setup.yml@mlops-templates
   parameters:
-    azure_service_connection: Azure-ARM-Dev
+    azure_service_connection: $(ado_service_connection_aml_ws)
     resource_group: $(resource_group)
     workspace_name: $(aml_workspace)
 ```
