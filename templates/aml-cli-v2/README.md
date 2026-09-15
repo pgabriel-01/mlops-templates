@@ -53,4 +53,6 @@ Defaults preserve the legacy pipeline variables, but new consumers should pass e
 4. `create-deployment.yml`
 5. `test-deployment.yml`
 
+When a batch job fails, `test-deployment.yml` discovers failed child runs, downloads their logs from the build agent, prints the primary user log and error logs with credential-shaped values redacted, and then fails the task.
+
 Project-specific environment, data, pipeline, deployment, endpoint, request, and scoring files remain in the consuming project repository.

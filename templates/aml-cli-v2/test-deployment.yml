@@ -38,6 +38,50 @@ steps:
         set -euo pipefail
         export AZURE_STORAGE_AUTH_MODE=login
 
+        print_safe_log() {
+          local log_file="$1"
+
+          echo "===== ${log_file} ====="
+          sed -E \
+            -e 's/([?&]sig=)[^&[:space:]]+/\1[REDACTED]/Ig' \
+            -e 's/(Authorization:[[:space:]]*Bearer[[:space:]]+)[^[:space:]]+/\1[REDACTED]/Ig' \
+            -e 's/((client_secret|account_key|password)[=:][[:space:]]*)[^[:space:]]+/\1[REDACTED]/Ig' \
+            "$log_file"
+        }
+
+        download_job_logs() {
+          local target_job="$1"
+          local download_path="$2"
+          local found_log=false
+
+          mkdir -p "$download_path"
+          echo "Downloading diagnostic logs for Azure ML job '$target_job'."
+          if ! az ml job download \
+            --name "$target_job" \
+            --resource-group "$RESOURCE_GROUP" \
+            --workspace-name "$WORKSPACE_NAME" \
+            --all \
+            --download-path "$download_path" \
+            --output none; then
+            echo "##vso[task.logissue type=warning]Unable to download logs for Azure ML job '$target_job'."
+            return
+          fi
+
+          while IFS= read -r log_file; do
+            found_log=true
+            print_safe_log "$log_file"
+          done < <(
+            find "$download_path" -type f \
+              \( -path '*/user_logs/std_log_0.txt' -o -iname '*error*.log' -o -iname '*error*.txt' \) \
+              -print |
+              sort
+          )
+
+          if [[ "$found_log" == "false" ]]; then
+            echo "##vso[task.logissue type=warning]No user_logs/std_log_0.txt or error log was found for Azure ML job '$target_job'."
+          fi
+        }
+
         if [[ "$ENDPOINT_TYPE" == "online" ]]; then
           az ml online-endpoint invoke \
             --name "$ENDPOINT_NAME" \
@@ -56,17 +100,51 @@ steps:
             --query name \
             --output tsv)"
           test -n "$job_name"
-          az ml job stream \
+          stream_failed=false
+          if ! az ml job stream \
             --name "$job_name" \
             --resource-group "$RESOURCE_GROUP" \
-            --workspace-name "$WORKSPACE_NAME"
-          status="$(az ml job show \
+            --workspace-name "$WORKSPACE_NAME"; then
+            stream_failed=true
+          fi
+          status="Unknown"
+          if ! status="$(az ml job show \
             --name "$job_name" \
             --resource-group "$RESOURCE_GROUP" \
             --workspace-name "$WORKSPACE_NAME" \
             --query status \
-            --output tsv)"
-          [[ "$status" == "Completed" ]]
+            --output tsv)"; then
+            echo "##vso[task.logissue type=warning]Unable to query final status for batch job '$job_name'."
+          fi
+          if [[ "$stream_failed" == "true" || "$status" != "Completed" ]]; then
+            echo "##vso[task.logissue type=error]Batch job '$job_name' finished with status '$status'."
+            diagnostic_root="$(mktemp -d)"
+            trap 'rm -rf "$diagnostic_root"' EXIT
+
+            failed_child_jobs=""
+            if ! failed_child_jobs="$(az ml job list \
+                --parent-job-name "$job_name" \
+                --resource-group "$RESOURCE_GROUP" \
+                --workspace-name "$WORKSPACE_NAME" \
+                --query "[?status!='Completed'].name" \
+                --output tsv)"; then
+              echo "##vso[task.logissue type=warning]Unable to list child jobs for batch job '$job_name'."
+            fi
+
+            if [[ -z "$failed_child_jobs" ]]; then
+              failed_child_jobs="$job_name"
+            fi
+
+            job_index=0
+            while IFS= read -r failed_job; do
+              if [[ -n "$failed_job" ]]; then
+                job_index=$((job_index + 1))
+                download_job_logs "$failed_job" "$diagnostic_root/job-$job_index"
+              fi
+            done <<< "$failed_child_jobs"
+
+            exit 1
+          fi
         else
           echo "Unsupported endpoint type '$ENDPOINT_TYPE'." >&2
           exit 2
