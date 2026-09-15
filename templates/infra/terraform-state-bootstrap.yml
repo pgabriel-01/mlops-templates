@@ -1,0 +1,116 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
+
+parameters:
+  - name: azureServiceConnection
+    type: string
+    default: '$(ado_service_connection_rg)'
+  - name: location
+    type: string
+    default: '$(location)'
+  - name: backendResourceGroup
+    type: string
+    default: '$(terraform_st_resource_group)'
+  - name: backendStorageAccount
+    type: string
+    default: '$(terraform_st_storage_account)'
+  - name: backendContainer
+    type: string
+    default: '$(terraform_st_container_name)'
+  - name: cicdPrincipalObjectId
+    type: string
+    default: ''
+  - name: roleAssignmentPropagationDelaySeconds
+    type: number
+    default: 60
+  - name: allowPublicNetworkAccess
+    type: boolean
+    default: true
+
+steps:
+  - task: AzureCLI@2
+    displayName: Bootstrap Terraform state
+    inputs:
+      azureSubscription: ${{ parameters.azureServiceConnection }}
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+
+        if ! az group show --name "$TF_STATE_RESOURCE_GROUP" >/dev/null 2>&1; then
+          az group create \
+            --name "$TF_STATE_RESOURCE_GROUP" \
+            --location "$TF_STATE_LOCATION" \
+            --output none
+        fi
+
+        if [[ "$ALLOW_PUBLIC_NETWORK_ACCESS" == "true" ]]; then
+          PUBLIC_NETWORK_ACCESS="Enabled"
+          DEFAULT_ACTION="Allow"
+        else
+          PUBLIC_NETWORK_ACCESS="Disabled"
+          DEFAULT_ACTION="Deny"
+        fi
+
+        if ! az storage account show \
+          --name "$TF_STATE_STORAGE_ACCOUNT" \
+          --resource-group "$TF_STATE_RESOURCE_GROUP" >/dev/null 2>&1; then
+          az storage account create \
+            --name "$TF_STATE_STORAGE_ACCOUNT" \
+            --resource-group "$TF_STATE_RESOURCE_GROUP" \
+            --location "$TF_STATE_LOCATION" \
+            --sku Standard_LRS \
+            --allow-shared-key-access false \
+            --https-only true \
+            --min-tls-version TLS1_2 \
+            --public-network-access "$PUBLIC_NETWORK_ACCESS" \
+            --default-action "$DEFAULT_ACTION" \
+            --output none
+        else
+          az storage account update \
+            --name "$TF_STATE_STORAGE_ACCOUNT" \
+            --resource-group "$TF_STATE_RESOURCE_GROUP" \
+            --allow-shared-key-access false \
+            --https-only true \
+            --min-tls-version TLS1_2 \
+            --public-network-access "$PUBLIC_NETWORK_ACCESS" \
+            --default-action "$DEFAULT_ACTION" \
+            --output none
+        fi
+
+        STORAGE_ACCOUNT_ID="$(az storage account show \
+          --name "$TF_STATE_STORAGE_ACCOUNT" \
+          --resource-group "$TF_STATE_RESOURCE_GROUP" \
+          --query id \
+          --output tsv)"
+
+        if [[ -n "$CICD_PRINCIPAL_OBJECT_ID" ]]; then
+          ROLE_ASSIGNMENT_ID="$(az role assignment list \
+            --scope "$STORAGE_ACCOUNT_ID" \
+            --role "Storage Blob Data Contributor" \
+            --query "[?principalId=='$CICD_PRINCIPAL_OBJECT_ID'] | [0].id" \
+            --output tsv)"
+          if [[ -z "$ROLE_ASSIGNMENT_ID" ]]; then
+            az role assignment create \
+              --assignee-object-id "$CICD_PRINCIPAL_OBJECT_ID" \
+              --assignee-principal-type ServicePrincipal \
+              --role "Storage Blob Data Contributor" \
+              --scope "$STORAGE_ACCOUNT_ID" \
+              --output none
+            sleep "$ROLE_ASSIGNMENT_PROPAGATION_DELAY_SECONDS"
+          fi
+        fi
+
+        az rest \
+          --method put \
+          --url "https://management.azure.com${STORAGE_ACCOUNT_ID}/blobServices/default/containers/${TF_STATE_CONTAINER}?api-version=2023-05-01" \
+          --body '{"properties":{"publicAccess":"None"}}' \
+          --output none
+    env:
+      TF_STATE_LOCATION: ${{ parameters.location }}
+      TF_STATE_RESOURCE_GROUP: ${{ parameters.backendResourceGroup }}
+      TF_STATE_STORAGE_ACCOUNT: ${{ parameters.backendStorageAccount }}
+      TF_STATE_CONTAINER: ${{ parameters.backendContainer }}
+      CICD_PRINCIPAL_OBJECT_ID: ${{ parameters.cicdPrincipalObjectId }}
+      ROLE_ASSIGNMENT_PROPAGATION_DELAY_SECONDS: ${{ parameters.roleAssignmentPropagationDelaySeconds }}
+      ALLOW_PUBLIC_NETWORK_ACCESS: ${{ parameters.allowPublicNetworkAccess }}

@@ -1,0 +1,32 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
+
+parameters:
+  - name: azure_service_connection
+    type: string
+    default: '$(ado_service_connection_aml_ws)'
+  - name: resource_group
+    type: string
+    default: '$(resource_group)'
+  - name: workspace_name
+    type: string
+    default: '$(aml_workspace)'
+  - name: working_directory
+    type: string
+    default: '$(System.DefaultWorkingDirectory)'
+
+steps:
+  - template: install-az-cli.yml
+    parameters:
+      azure_service_connection: ${{ parameters.azure_service_connection }}
+      working_directory: ${{ parameters.working_directory }}
+  - template: install-aml-cli.yml
+    parameters:
+      azure_service_connection: ${{ parameters.azure_service_connection }}
+      working_directory: ${{ parameters.working_directory }}
+  - template: connect-to-workspace.yml
+    parameters:
+      azure_service_connection: ${{ parameters.azure_service_connection }}
+      resource_group: ${{ parameters.resource_group }}
+      workspace_name: ${{ parameters.workspace_name }}
+      working_directory: ${{ parameters.working_directory }}

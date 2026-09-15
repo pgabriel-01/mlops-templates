@@ -1,8 +1,17 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
 
+parameters:
+  - name: terraformVersion
+    type: string
+    default: '$(terraform_version)'
+
 steps:
- - task: TerraformInstaller@0
-   displayName: 'Terraform install'
-   inputs:
-     terraformVersion: $(terraform_version)
+  - template: resolve-terraform-version.yml
+    parameters:
+      terraformVersion: ${{ parameters.terraformVersion }}
+
+  - task: TerraformInstaller@1
+    displayName: Install Terraform
+    inputs:
+      terraformVersion: $(terraformResolvedVersion)

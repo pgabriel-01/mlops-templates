@@ -2,19 +2,41 @@
 # Licensed under the MIT License.
 
 parameters:
-- name: environment_name
-  type: string
-- name: environment_file
-  type: string
+  - name: azure_service_connection
+    type: string
+    default: '$(ado_service_connection_aml_ws)'
+  - name: resource_group
+    type: string
+    default: '$(resource_group)'
+  - name: workspace_name
+    type: string
+    default: '$(aml_workspace)'
+  - name: working_directory
+    type: string
+    default: '$(System.DefaultWorkingDirectory)'
+  - name: environment_name
+    type: string
+  - name: environment_file
+    type: string
 
 steps:
   - task: AzureCLI@2
-    displayName: Register Azure ML environment 
-    continueOnError: true
-    inputs: 
-      azureSubscription: $(ado_service_connection_rg) #needs to have access at the RG level 
+    displayName: Register Azure ML environment
+    inputs:
+      azureSubscription: ${{ parameters.azure_service_connection }}
       scriptType: bash
-      workingDirectory: $(System.DefaultWorkingDirectory)
+      workingDirectory: ${{ parameters.working_directory }}
       scriptLocation: inlineScript
       inlineScript: |
-        az ml environment create --name ${{ parameters.environment_name }} --file ${{ parameters.environment_file }}
+        set -euo pipefail
+        az ml environment create \
+          --name "$ENVIRONMENT_NAME" \
+          --file "$ENVIRONMENT_FILE" \
+          --resource-group "$RESOURCE_GROUP" \
+          --workspace-name "$WORKSPACE_NAME" \
+          --output none
+    env:
+      ENVIRONMENT_NAME: ${{ parameters.environment_name }}
+      ENVIRONMENT_FILE: ${{ parameters.environment_file }}
+      RESOURCE_GROUP: ${{ parameters.resource_group }}
+      WORKSPACE_NAME: ${{ parameters.workspace_name }}

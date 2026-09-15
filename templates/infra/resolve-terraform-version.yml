@@ -1,0 +1,56 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
+
+parameters:
+  - name: terraformVersion
+    type: string
+    default: '$(terraform_version)'
+
+steps:
+  - task: Bash@3
+    displayName: Resolve Terraform version
+    inputs:
+      targetType: inline
+      script: |
+        set -euo pipefail
+
+        case "$REQUESTED_TERRAFORM_VERSION" in
+          latest)
+            RESOLVED_TERRAFORM_VERSION=latest
+            ;;
+          [0-9]*.[0-9]*.[0-9]*)
+            if [[ ! "$REQUESTED_TERRAFORM_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "terraformVersion must be 'latest', an exact x.y.z version, or an x.y.x range." >&2
+              exit 1
+            fi
+            RESOLVED_TERRAFORM_VERSION="$REQUESTED_TERRAFORM_VERSION"
+            ;;
+          [0-9]*.[0-9]*.x)
+            if [[ ! "$REQUESTED_TERRAFORM_VERSION" =~ ^([0-9]+)\.([0-9]+)\.x$ ]]; then
+              echo "terraformVersion must be 'latest', an exact x.y.z version, or an x.y.x range." >&2
+              exit 1
+            fi
+            VERSION_PREFIX="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}."
+            RESOLVED_TERRAFORM_VERSION="$(
+              curl --fail --silent --show-error --location \
+                https://releases.hashicorp.com/terraform/index.json |
+                jq --raw-output --arg prefix "$VERSION_PREFIX" \
+                  '.versions | keys[] | select(startswith($prefix)) | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' |
+                sort -V |
+                tail -n 1
+            )"
+            if [[ -z "$RESOLVED_TERRAFORM_VERSION" ]]; then
+              echo "No stable Terraform release matched '$REQUESTED_TERRAFORM_VERSION'." >&2
+              exit 1
+            fi
+            ;;
+          *)
+            echo "terraformVersion must be 'latest', an exact x.y.z version, or an x.y.x range." >&2
+            exit 1
+            ;;
+        esac
+
+        echo "Resolved Terraform version: $RESOLVED_TERRAFORM_VERSION"
+        echo "##vso[task.setvariable variable=terraformResolvedVersion]$RESOLVED_TERRAFORM_VERSION"
+    env:
+      REQUESTED_TERRAFORM_VERSION: ${{ parameters.terraformVersion }}

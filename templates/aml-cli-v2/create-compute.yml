@@ -2,37 +2,57 @@
 # Licensed under the MIT License.
 
 parameters:
-- name: cluster_name
-  type: string
-- name: size
-  type: string
-- name: min_instances
-  type: number
-- name: max_instances
-  type: number
-- name: cluster_tier
-  type: string
+  - name: azure_service_connection
+    type: string
+    default: '$(ado_service_connection_aml_ws)'
+  - name: resource_group
+    type: string
+    default: '$(resource_group)'
+  - name: workspace_name
+    type: string
+    default: '$(aml_workspace)'
+  - name: cluster_name
+    type: string
+  - name: size
+    type: string
+  - name: min_instances
+    type: number
+  - name: max_instances
+    type: number
+  - name: cluster_tier
+    type: string
 
 steps:
   - task: AzureCLI@2
     displayName: Create compute cluster
-    continueOnError: true
-    inputs: 
-      azureSubscription: $(ado_service_connection_rg) #needs to have access at the RG level 
+    inputs:
+      azureSubscription: ${{ parameters.azure_service_connection }}
       scriptType: bash
       scriptLocation: inlineScript
       inlineScript: |
-        compute_name=$(az ml compute show -n ${{ parameters.cluster_name }} --query name -o tsv)
-        if [[ -z "$compute_name" ]]
-        then
-          echo "Compute does not exist. Creating the cluster..."
-          az ml compute create --name ${{ parameters.cluster_name }} \
-                                  --type amlcompute \
-                                  --size ${{ parameters.size }} \
-                                  --min-instances ${{ parameters.min_instances }} \
-                                  --max-instances ${{ parameters.max_instances }} \
-                                  --tier ${{ parameters.cluster_tier }} 
+        set -euo pipefail
+        if az ml compute show \
+          --name "$CLUSTER_NAME" \
+          --resource-group "$RESOURCE_GROUP" \
+          --workspace-name "$WORKSPACE_NAME" >/dev/null 2>&1; then
+          echo "Compute '$CLUSTER_NAME' already exists."
         else
-          echo "Compute exists. Skipping cluster creation."
-          exit 0
+          az ml compute create \
+            --name "$CLUSTER_NAME" \
+            --type amlcompute \
+            --size "$COMPUTE_SIZE" \
+            --min-instances "$MIN_INSTANCES" \
+            --max-instances "$MAX_INSTANCES" \
+            --tier "$CLUSTER_TIER" \
+            --resource-group "$RESOURCE_GROUP" \
+            --workspace-name "$WORKSPACE_NAME" \
+            --output none
         fi
+    env:
+      CLUSTER_NAME: ${{ parameters.cluster_name }}
+      COMPUTE_SIZE: ${{ parameters.size }}
+      MIN_INSTANCES: ${{ parameters.min_instances }}
+      MAX_INSTANCES: ${{ parameters.max_instances }}
+      CLUSTER_TIER: ${{ parameters.cluster_tier }}
+      RESOURCE_GROUP: ${{ parameters.resource_group }}
+      WORKSPACE_NAME: ${{ parameters.workspace_name }}
