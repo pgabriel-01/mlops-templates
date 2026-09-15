@@ -9,7 +9,7 @@ steps:
     architecture: 'x64'
 
 - script: |
-    pip install azure-ai-ml>=1.31.0
+    pip install azure-ai-ml>=1.35.0
     pip install azure-identity
     pip install azure-core
   displayName: 'Install python sdk v2 and azure-identity'
