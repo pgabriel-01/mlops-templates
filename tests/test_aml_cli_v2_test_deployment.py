@@ -68,12 +68,14 @@ class TestDeploymentTemplateTests(unittest.TestCase):
                       shift
                     done
                     mkdir -p "$download_path/failed-child-run/user_logs"
+                    mkdir -p "$download_path/failed-child-run/logs"
                     cat > "$download_path/failed-child-run/user_logs/std_log_0.txt" <<'EOF'
                 User process exited with code 42.
                 https://storage.invalid/container?sig=live-secret
                 Authorization: Bearer live-token
                 client_secret=live-client-secret
                 EOF
+                    printf 'Model initialization failed.\\n' > "$download_path/failed-child-run/logs/job_result.txt"
                     ;;
                   *)
                     printf 'Unexpected az arguments: %s\\n' "$*" >&2
@@ -138,6 +140,7 @@ class TestDeploymentTemplateTests(unittest.TestCase):
         self.assertIn("ml job list --parent-job-name parent-job", calls)
         self.assertIn("ml job download --name failed-child-run", calls)
         self.assertIn("User process exited with code 42.", result.stdout)
+        self.assertIn("Model initialization failed.", result.stdout)
         self.assertIn("sig=[REDACTED]", result.stdout)
         self.assertIn("Authorization: Bearer [REDACTED]", result.stdout)
         self.assertIn("client_secret=[REDACTED]", result.stdout)
