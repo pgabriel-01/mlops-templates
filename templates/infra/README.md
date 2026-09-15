@@ -114,6 +114,8 @@ The project Terraform root must accept:
 - `environment`
 - `project_number`
 - `cicd_principal_object_id`
+- `platform_resource_group_name`
+- `platform_virtual_network_name`
 - `enable_aml_computecluster`
 - `aml_compute_sku`
 - `enable_monitoring`
@@ -159,6 +161,8 @@ The apply task is named `terraformOutputs`; its output variables use the same na
     environment: $(environment)
     projectNumber: $(project_number)
     cicdPrincipalObjectId: $(cicd_principal_object_id)
+    platformResourceGroupName: $(platform_resource_group_name)
+    platformVirtualNetworkName: $(platform_virtual_network_name)
     enableAmlComputeCluster: true
     amlComputeSku: $(aml_compute_sku)
     enableMonitoring: true
@@ -169,5 +173,7 @@ The apply task is named `terraformOutputs`; its output variables use the same na
 ```
 
 `cicdPrincipalObjectId` must be the Entra service-principal object ID, not the application/client ID exposed as `servicePrincipalId` by `AzureCLI@2`.
+
+`platformResourceGroupName` and `platformVirtualNetworkName` are optional and default to empty strings. Private deployments can use them to identify an existing platform VNet that must be connected to the workload VNet.
 
 The lower-level templates remain available for compatibility. `run-terraform-plan.yml` accepts the same `projectNumber` and `cicdPrincipalObjectId` values when `includeProjectMetadata: true`; the flag defaults to `false` so Terraform roots that do not declare those variables continue to work. New consumers should use the composed templates.

@@ -40,6 +40,12 @@ parameters:
     default: '001'
   - name: cicdPrincipalObjectId
     type: string
+  - name: platformResourceGroupName
+    type: string
+    default: ''
+  - name: platformVirtualNetworkName
+    type: string
+    default: ''
   - name: enableAmlComputeCluster
     type: boolean
     default: true
@@ -136,6 +142,8 @@ steps:
           -var "environment=$TF_VAR_ENVIRONMENT" \
           -var "project_number=$TF_VAR_PROJECT_NUMBER" \
           -var "cicd_principal_object_id=$TF_VAR_CICD_PRINCIPAL_OBJECT_ID" \
+          -var "platform_resource_group_name=$TF_VAR_PLATFORM_RESOURCE_GROUP_NAME" \
+          -var "platform_virtual_network_name=$TF_VAR_PLATFORM_VIRTUAL_NETWORK_NAME" \
           -var "enable_aml_computecluster=$TF_VAR_ENABLE_AML_COMPUTE" \
           -var "aml_compute_sku=$TF_VAR_AML_COMPUTE_SKU" \
           -var "enable_monitoring=$TF_VAR_ENABLE_MONITORING" \
@@ -156,6 +164,8 @@ steps:
       TF_VAR_ENVIRONMENT: ${{ parameters.environment }}
       TF_VAR_PROJECT_NUMBER: ${{ parameters.projectNumber }}
       TF_VAR_CICD_PRINCIPAL_OBJECT_ID: ${{ parameters.cicdPrincipalObjectId }}
+      TF_VAR_PLATFORM_RESOURCE_GROUP_NAME: ${{ parameters.platformResourceGroupName }}
+      TF_VAR_PLATFORM_VIRTUAL_NETWORK_NAME: ${{ parameters.platformVirtualNetworkName }}
       TF_VAR_ENABLE_AML_COMPUTE: ${{ parameters.enableAmlComputeCluster }}
       TF_VAR_AML_COMPUTE_SKU: ${{ parameters.amlComputeSku }}
       TF_VAR_ENABLE_MONITORING: ${{ parameters.enableMonitoring }}
