@@ -1,7 +1,6 @@
-const core = require('@actions/core');
-const github = require('@actions/github');
-const yaml = require('js-yaml');
-const fs = require('fs');
+import * as core from '@actions/core';
+import * as yaml from 'js-yaml';
+import fs from 'node:fs';
 checkGenerateEntity()
 
 try {  
