@@ -116,6 +116,7 @@ The project Terraform root must accept:
 - `cicd_principal_object_id`
 - `platform_resource_group_name`
 - `platform_virtual_network_name`
+- `import_existing_platform_connectivity`
 - `enable_aml_computecluster`
 - `aml_compute_sku`
 - `enable_monitoring`
@@ -163,6 +164,7 @@ The apply task is named `terraformOutputs`; its output variables use the same na
     cicdPrincipalObjectId: $(cicd_principal_object_id)
     platformResourceGroupName: $(platform_resource_group_name)
     platformVirtualNetworkName: $(platform_virtual_network_name)
+    importExistingPlatformConnectivity: false
     enableAmlComputeCluster: true
     amlComputeSku: $(aml_compute_sku)
     enableMonitoring: true
@@ -175,5 +177,7 @@ The apply task is named `terraformOutputs`; its output variables use the same na
 `cicdPrincipalObjectId` must be the Entra service-principal object ID, not the application/client ID exposed as `servicePrincipalId` by `AzureCLI@2`.
 
 `platformResourceGroupName` and `platformVirtualNetworkName` are optional and default to empty strings. Private deployments can use them to identify an existing platform VNet that must be connected to the workload VNet.
+
+`importExistingPlatformConnectivity` defaults to `false`. Set it to `true` only while adopting existing bidirectional VNet peerings and AML API/notebooks private DNS links into Terraform state.
 
 The lower-level templates remain available for compatibility. `run-terraform-plan.yml` accepts the same `projectNumber` and `cicdPrincipalObjectId` values when `includeProjectMetadata: true`; the flag defaults to `false` so Terraform roots that do not declare those variables continue to work. New consumers should use the composed templates.

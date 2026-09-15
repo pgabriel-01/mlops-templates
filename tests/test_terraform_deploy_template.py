@@ -47,6 +47,29 @@ class TerraformDeployTemplateTests(unittest.TestCase):
                 self.template,
             )
 
+    def test_existing_platform_connectivity_import_is_normalized_and_passed(self) -> None:
+        self.assertIn(
+            "- name: importExistingPlatformConnectivity\n"
+            "    type: boolean\n"
+            "    default: false",
+            self.template,
+        )
+        self.assertIn(
+            'TF_VAR_IMPORT_EXISTING_PLATFORM_CONNECTIVITY="$(normalize_bool '
+            '"$TF_VAR_IMPORT_EXISTING_PLATFORM_CONNECTIVITY")"',
+            self.template,
+        )
+        self.assertIn(
+            "TF_VAR_IMPORT_EXISTING_PLATFORM_CONNECTIVITY: "
+            "${{ parameters.importExistingPlatformConnectivity }}",
+            self.template,
+        )
+        self.assertIn(
+            '-var "import_existing_platform_connectivity='
+            '$TF_VAR_IMPORT_EXISTING_PLATFORM_CONNECTIVITY"',
+            self.template,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

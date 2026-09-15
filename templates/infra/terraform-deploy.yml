@@ -46,6 +46,9 @@ parameters:
   - name: platformVirtualNetworkName
     type: string
     default: ''
+  - name: importExistingPlatformConnectivity
+    type: boolean
+    default: false
   - name: enableAmlComputeCluster
     type: boolean
     default: true
@@ -121,6 +124,7 @@ steps:
         TF_VAR_ENABLE_AML_COMPUTE="$(normalize_bool "$TF_VAR_ENABLE_AML_COMPUTE")"
         TF_VAR_ENABLE_MONITORING="$(normalize_bool "$TF_VAR_ENABLE_MONITORING")"
         TF_VAR_ENABLE_PRIVATE_ENDPOINTS="$(normalize_bool "$TF_VAR_ENABLE_PRIVATE_ENDPOINTS")"
+        TF_VAR_IMPORT_EXISTING_PLATFORM_CONNECTIVITY="$(normalize_bool "$TF_VAR_IMPORT_EXISTING_PLATFORM_CONNECTIVITY")"
 
         terraform init -input=false -reconfigure \
           -backend-config="storage_account_name=$TF_STATE_STORAGE_ACCOUNT" \
@@ -144,6 +148,7 @@ steps:
           -var "cicd_principal_object_id=$TF_VAR_CICD_PRINCIPAL_OBJECT_ID" \
           -var "platform_resource_group_name=$TF_VAR_PLATFORM_RESOURCE_GROUP_NAME" \
           -var "platform_virtual_network_name=$TF_VAR_PLATFORM_VIRTUAL_NETWORK_NAME" \
+          -var "import_existing_platform_connectivity=$TF_VAR_IMPORT_EXISTING_PLATFORM_CONNECTIVITY" \
           -var "enable_aml_computecluster=$TF_VAR_ENABLE_AML_COMPUTE" \
           -var "aml_compute_sku=$TF_VAR_AML_COMPUTE_SKU" \
           -var "enable_monitoring=$TF_VAR_ENABLE_MONITORING" \
@@ -166,6 +171,7 @@ steps:
       TF_VAR_CICD_PRINCIPAL_OBJECT_ID: ${{ parameters.cicdPrincipalObjectId }}
       TF_VAR_PLATFORM_RESOURCE_GROUP_NAME: ${{ parameters.platformResourceGroupName }}
       TF_VAR_PLATFORM_VIRTUAL_NETWORK_NAME: ${{ parameters.platformVirtualNetworkName }}
+      TF_VAR_IMPORT_EXISTING_PLATFORM_CONNECTIVITY: ${{ parameters.importExistingPlatformConnectivity }}
       TF_VAR_ENABLE_AML_COMPUTE: ${{ parameters.enableAmlComputeCluster }}
       TF_VAR_AML_COMPUTE_SKU: ${{ parameters.amlComputeSku }}
       TF_VAR_ENABLE_MONITORING: ${{ parameters.enableMonitoring }}
