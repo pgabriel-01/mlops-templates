@@ -27,14 +27,25 @@ parameters:
 
 steps:
   - task: AzureCLI@2
-    displayName: Create deployment
+    displayName: Create/Update deployment
     inputs:
       azureSubscription: ${{ parameters.azure_service_connection }}
       scriptType: bash
       scriptLocation: inlineScript
       inlineScript: |
         set -euo pipefail
-        az ml "$ENDPOINT_TYPE-deployment" create \
+
+        if az ml "$ENDPOINT_TYPE-deployment" show \
+          --name "$DEPLOYMENT_NAME" \
+          --endpoint-name "$ENDPOINT_NAME" \
+          --resource-group "$RESOURCE_GROUP" \
+          --workspace-name "$WORKSPACE_NAME" >/dev/null 2>&1; then
+          action=update
+        else
+          action=create
+        fi
+
+        az ml "$ENDPOINT_TYPE-deployment" "$action" \
           --name "$DEPLOYMENT_NAME" \
           --endpoint-name "$ENDPOINT_NAME" \
           --file "$DEPLOYMENT_FILE" \
