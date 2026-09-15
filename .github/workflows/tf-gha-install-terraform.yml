@@ -7,7 +7,6 @@ on:
         type: string
         description: 'Terraform Action- Apply or Destroy'   
         required: true
-        default: 'apply'
       dply_environment:
         type: string
         required: true 
@@ -103,7 +102,7 @@ jobs:
     - name: create-tfstate-resource-group
       uses: azure/CLI@v2
       with:
-        azcliversion: 2.30.0
+        azcliversion: 2.90.0
         #
         inlineScript: |
           az account set -s ${{ secrets.AZURE_SUBSCRIPTION_ID }}
@@ -111,7 +110,7 @@ jobs:
     - name: create-tfstate-storage-account
       uses: azure/CLI@v2
       with:
-        azcliversion: 2.30.0
+        azcliversion: 2.90.0
         #
         inlineScript: |
           az account set -s ${{ secrets.AZURE_SUBSCRIPTION_ID }}
