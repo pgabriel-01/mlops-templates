@@ -49,6 +49,12 @@ parameters:
   - name: importExistingPlatformConnectivity
     type: boolean
     default: false
+  - name: existingCicdKeyVaultSecretsOfficerRoleAssignmentId
+    type: string
+    default: ''
+  - name: existingCicdKeyVaultCryptoOfficerRoleAssignmentId
+    type: string
+    default: ''
   - name: enableAmlComputeCluster
     type: boolean
     default: true
@@ -149,6 +155,8 @@ steps:
           -var "platform_resource_group_name=$TF_VAR_PLATFORM_RESOURCE_GROUP_NAME" \
           -var "platform_virtual_network_name=$TF_VAR_PLATFORM_VIRTUAL_NETWORK_NAME" \
           -var "import_existing_platform_connectivity=$TF_VAR_IMPORT_EXISTING_PLATFORM_CONNECTIVITY" \
+          -var "existing_cicd_key_vault_secrets_officer_role_assignment_id=$TF_VAR_existing_cicd_key_vault_secrets_officer_role_assignment_id" \
+          -var "existing_cicd_key_vault_crypto_officer_role_assignment_id=$TF_VAR_existing_cicd_key_vault_crypto_officer_role_assignment_id" \
           -var "enable_aml_computecluster=$TF_VAR_ENABLE_AML_COMPUTE" \
           -var "aml_compute_sku=$TF_VAR_AML_COMPUTE_SKU" \
           -var "enable_monitoring=$TF_VAR_ENABLE_MONITORING" \
@@ -172,6 +180,8 @@ steps:
       TF_VAR_PLATFORM_RESOURCE_GROUP_NAME: ${{ parameters.platformResourceGroupName }}
       TF_VAR_PLATFORM_VIRTUAL_NETWORK_NAME: ${{ parameters.platformVirtualNetworkName }}
       TF_VAR_IMPORT_EXISTING_PLATFORM_CONNECTIVITY: ${{ parameters.importExistingPlatformConnectivity }}
+      TF_VAR_existing_cicd_key_vault_secrets_officer_role_assignment_id: ${{ parameters.existingCicdKeyVaultSecretsOfficerRoleAssignmentId }}
+      TF_VAR_existing_cicd_key_vault_crypto_officer_role_assignment_id: ${{ parameters.existingCicdKeyVaultCryptoOfficerRoleAssignmentId }}
       TF_VAR_ENABLE_AML_COMPUTE: ${{ parameters.enableAmlComputeCluster }}
       TF_VAR_AML_COMPUTE_SKU: ${{ parameters.amlComputeSku }}
       TF_VAR_ENABLE_MONITORING: ${{ parameters.enableMonitoring }}
@@ -217,3 +227,5 @@ steps:
             echo "##vso[task.setvariable variable=training_compute_name;isOutput=true]$TRAINING_COMPUTE_NAME"
         env:
           TF_PLAN_FILE: ${{ parameters.planFile }}
+          TF_VAR_existing_cicd_key_vault_secrets_officer_role_assignment_id: ${{ parameters.existingCicdKeyVaultSecretsOfficerRoleAssignmentId }}
+          TF_VAR_existing_cicd_key_vault_crypto_officer_role_assignment_id: ${{ parameters.existingCicdKeyVaultCryptoOfficerRoleAssignmentId }}

@@ -70,6 +70,40 @@ class TerraformDeployTemplateTests(unittest.TestCase):
             self.template,
         )
 
+    def test_existing_key_vault_role_assignments_are_optional_and_passed(self) -> None:
+        expected_contracts = (
+            (
+                "existingCicdKeyVaultSecretsOfficerRoleAssignmentId",
+                "TF_VAR_existing_cicd_key_vault_secrets_officer_role_assignment_id",
+                "existing_cicd_key_vault_secrets_officer_role_assignment_id",
+            ),
+            (
+                "existingCicdKeyVaultCryptoOfficerRoleAssignmentId",
+                "TF_VAR_existing_cicd_key_vault_crypto_officer_role_assignment_id",
+                "existing_cicd_key_vault_crypto_officer_role_assignment_id",
+            ),
+        )
+
+        plan_section, apply_section = self.template.split(
+            "displayName: Terraform apply saved plan", maxsplit=1
+        )
+        for parameter, environment_variable, terraform_variable in expected_contracts:
+            self.assertIn(
+                f"- name: {parameter}\n"
+                "    type: string\n"
+                "    default: ''",
+                self.template,
+            )
+            environment_contract = (
+                f"{environment_variable}: ${{{{ parameters.{parameter} }}}}"
+            )
+            self.assertIn(environment_contract, plan_section)
+            self.assertIn(environment_contract, apply_section)
+            self.assertIn(
+                f'-var "{terraform_variable}=${environment_variable}"',
+                plan_section,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

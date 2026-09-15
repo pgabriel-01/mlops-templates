@@ -117,6 +117,8 @@ The project Terraform root must accept:
 - `platform_resource_group_name`
 - `platform_virtual_network_name`
 - `import_existing_platform_connectivity`
+- `existing_cicd_key_vault_secrets_officer_role_assignment_id`
+- `existing_cicd_key_vault_crypto_officer_role_assignment_id`
 - `enable_aml_computecluster`
 - `aml_compute_sku`
 - `enable_monitoring`
@@ -165,6 +167,8 @@ The apply task is named `terraformOutputs`; its output variables use the same na
     platformResourceGroupName: $(platform_resource_group_name)
     platformVirtualNetworkName: $(platform_virtual_network_name)
     importExistingPlatformConnectivity: false
+    existingCicdKeyVaultSecretsOfficerRoleAssignmentId: ''
+    existingCicdKeyVaultCryptoOfficerRoleAssignmentId: ''
     enableAmlComputeCluster: true
     amlComputeSku: $(aml_compute_sku)
     enableMonitoring: true
@@ -179,5 +183,7 @@ The apply task is named `terraformOutputs`; its output variables use the same na
 `platformResourceGroupName` and `platformVirtualNetworkName` are optional and default to empty strings. Private deployments can use them to identify an existing platform VNet that must be connected to the workload VNet.
 
 `importExistingPlatformConnectivity` defaults to `false`. Set it to `true` only while adopting existing bidirectional VNet peerings and AML API/notebooks private DNS links into Terraform state.
+
+`existingCicdKeyVaultSecretsOfficerRoleAssignmentId` and `existingCicdKeyVaultCryptoOfficerRoleAssignmentId` default to empty strings. Supply existing Azure role-assignment resource IDs only during one-time Terraform state adoption; empty values preserve normal create/manage behavior.
 
 The lower-level templates remain available for compatibility. `run-terraform-plan.yml` accepts the same `projectNumber` and `cicdPrincipalObjectId` values when `includeProjectMetadata: true`; the flag defaults to `false` so Terraform roots that do not declare those variables continue to work. New consumers should use the composed templates.
