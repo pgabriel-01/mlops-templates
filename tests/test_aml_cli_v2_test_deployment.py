@@ -67,6 +67,16 @@ class TestDeploymentTemplateTests(unittest.TestCase):
                       fi
                       shift
                     done
+                    if [[ "$AZ_SCENARIO" == "batch-success" ]]; then
+                      mkdir -p "$download_path/parent-job/outputs"
+                      printf 'prediction\\n1\\n' > "$download_path/parent-job/outputs/predictions.csv"
+                      exit 0
+                    fi
+                    if [[ "$AZ_SCENARIO" == "batch-empty-output" ]]; then
+                      mkdir -p "$download_path/parent-job/outputs"
+                      : > "$download_path/parent-job/outputs/predictions.csv"
+                      exit 0
+                    fi
                     mkdir -p "$download_path/failed-child-run/user_logs"
                     mkdir -p "$download_path/failed-child-run/logs"
                     cat > "$download_path/failed-child-run/user_logs/std_log_0.txt" <<'EOF'
@@ -130,7 +140,18 @@ class TestDeploymentTemplateTests(unittest.TestCase):
         self.assertIn("ml batch-endpoint invoke", calls)
         self.assertIn("ml job stream", calls)
         self.assertIn("ml job show", calls)
-        self.assertNotIn("ml job download", calls)
+        self.assertIn("ml job download --name parent-job", calls)
+        self.assertIn("Verified nonempty batch predictions output", result.stdout)
+
+    def test_completed_batch_job_fails_when_predictions_are_empty(self) -> None:
+        result = self.run_script("batch-empty-output", "batch")
+
+        self.assertEqual(1, result.returncode)
+        self.assertIn("ml job download --name parent-job", self.call_log.read_text())
+        self.assertIn(
+            "did not produce a nonempty predictions.csv",
+            result.stdout,
+        )
 
     def test_failed_batch_job_downloads_and_prints_redacted_child_log(self) -> None:
         result = self.run_script("batch-failure", "batch")

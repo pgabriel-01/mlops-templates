@@ -55,4 +55,6 @@ Defaults preserve the legacy pipeline variables, but new consumers should pass e
 
 When a batch job fails, `test-deployment.yml` discovers failed child runs, downloads their logs from the build agent, prints the primary user log, job result, and error logs with credential-shaped values redacted, and then fails the task.
 
+When a batch job completes, the template downloads all job outputs through Azure ML CLI and requires an exact, nonempty `predictions.csv` append-row output.
+
 Project-specific environment, data, pipeline, deployment, endpoint, request, and scoring files remain in the consuming project repository.

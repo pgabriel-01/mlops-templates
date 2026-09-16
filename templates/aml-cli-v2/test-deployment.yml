@@ -82,6 +82,35 @@ steps:
           fi
         }
 
+        verify_batch_predictions() {
+          local target_job="$1"
+          local download_path="$2"
+          local predictions_file
+
+          mkdir -p "$download_path"
+          echo "Downloading outputs for completed Azure ML batch job '$target_job'."
+          if ! az ml job download \
+            --name "$target_job" \
+            --resource-group "$RESOURCE_GROUP" \
+            --workspace-name "$WORKSPACE_NAME" \
+            --all \
+            --download-path "$download_path" \
+            --output none; then
+            echo "##vso[task.logissue type=error]Unable to download outputs for completed Azure ML batch job '$target_job'."
+            return 1
+          fi
+
+          predictions_file="$(
+            find "$download_path" -type f -name 'predictions.csv' -size +0c -print -quit
+          )"
+          if [[ -z "$predictions_file" ]]; then
+            echo "##vso[task.logissue type=error]Completed Azure ML batch job '$target_job' did not produce a nonempty predictions.csv."
+            return 1
+          fi
+
+          echo "Verified nonempty batch predictions output: ${predictions_file#"$download_path"/}"
+        }
+
         if [[ "$ENDPOINT_TYPE" == "online" ]]; then
           az ml online-endpoint invoke \
             --name "$ENDPOINT_NAME" \
@@ -145,6 +174,10 @@ steps:
 
             exit 1
           fi
+
+          output_root="$(mktemp -d)"
+          trap 'rm -rf "$output_root"' EXIT
+          verify_batch_predictions "$job_name" "$output_root"
         else
           echo "Unsupported endpoint type '$ENDPOINT_TYPE'." >&2
           exit 2
