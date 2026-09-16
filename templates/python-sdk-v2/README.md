@@ -54,7 +54,8 @@ long-running operations, and test the deployment. Batch invocation waits for a
 terminal job state and fails the workflow with parent and child-job diagnostics.
 The deployment workflows intentionally use Azure ML's MLflow no-code deployment
 path and fail with an actionable error if the referenced model is not MLflow.
-Batch deployment also rejects mutable or unversioned environment references.
+Batch deployment rejects mutable labels, `latest`, unversioned references,
+images, and inline Conda environments before any Azure ML operation.
 
 Promote to `test` or `prod` by calling the same reusable workflow with a
 different GitHub Environment and environment-scoped OIDC secrets and variables.

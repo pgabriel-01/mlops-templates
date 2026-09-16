@@ -34,7 +34,7 @@ on:
         required: true
         type: string
       deployment_environment:
-        description: Immutable Azure ML environment version for batch inference.
+        description: Immutable numeric-version Azure ML environment reference
         required: false
         default: azureml://registries/azureml/environments/sklearn-1.5/versions/53
         type: string
