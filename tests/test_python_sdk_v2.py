@@ -21,7 +21,6 @@ create_online_endpoint = importlib.import_module("create_online_endpoint")
 test_batch_endpoint = importlib.import_module("test_batch_endpoint")
 train_and_register_model = importlib.import_module("train_and_register_model")
 
-
 @pytest.mark.parametrize("ci_environment", ["GITHUB_ACTIONS", "CI"])
 def test_ci_uses_validated_azure_cli_credential(monkeypatch, ci_environment):
     credential = Mock()
@@ -209,7 +208,7 @@ def test_online_endpoint_uses_attached_arc_kubernetes_compute(monkeypatch):
     )
 
 
-def test_online_compute_rejects_direct_aks_attachment():
+def test_online_compute_accepts_direct_aks_attachment_with_uami():
     client = Mock()
     compute = _arc_kubernetes_compute()
     compute.resource_id = (
@@ -218,8 +217,22 @@ def test_online_compute_rejects_direct_aks_attachment():
     )
     client.compute.get.return_value = compute
 
-    with pytest.raises(RuntimeError, match="Azure Arc-enabled Kubernetes"):
-        aml_client.get_kubernetes_online_compute(client, "direct-aks")
+    result = aml_client.get_kubernetes_online_compute(client, "direct-aks")
+
+    assert result is compute
+
+
+def test_online_compute_rejects_unsupported_cluster_resource():
+    client = Mock()
+    compute = _arc_kubernetes_compute()
+    compute.resource_id = (
+        "/subscriptions/sub/resourceGroups/rg/providers/"
+        "Microsoft.Compute/virtualMachines/not-kubernetes"
+    )
+    client.compute.get.return_value = compute
+
+    with pytest.raises(RuntimeError, match="direct AKS managedClusters"):
+        aml_client.get_kubernetes_online_compute(client, "not-kubernetes")
 
 
 def test_online_compute_requires_dedicated_namespace_and_uami():
@@ -603,6 +616,121 @@ def test_batch_endpoint_terminal_operation_failure_propagates(monkeypatch):
     client.batch_endpoints.get.assert_called_once_with("batch-endpoint")
 
 
+def test_batch_deployment_uses_explicit_immutable_environment(monkeypatch):
+    client = Mock()
+    client.models.get.return_value = SimpleNamespace(
+        id="azureml:model:1",
+        type="mlflow_model",
+    )
+    deployment_poller = Mock()
+    deployment_poller.result.return_value = SimpleNamespace(
+        provisioning_state="Succeeded"
+    )
+    client.batch_deployments.begin_create_or_update.return_value = deployment_poller
+    client.batch_deployments.get.return_value = SimpleNamespace(
+        provisioning_state="Succeeded"
+    )
+    endpoint = SimpleNamespace(
+        defaults=SimpleNamespace(deployment_name=None),
+        provisioning_state="Succeeded",
+    )
+    client.batch_endpoints.get.return_value = endpoint
+    endpoint_poller = Mock()
+    endpoint_poller.result.return_value = endpoint
+    client.batch_endpoints.begin_create_or_update.return_value = endpoint_poller
+    batch_deployment_type = Mock(return_value=SimpleNamespace())
+    monkeypatch.setattr(create_batch_deployment, "create_ml_client", lambda _: client)
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "BatchDeployment",
+        batch_deployment_type,
+    )
+
+    create_batch_deployment.run(_batch_deployment_args())
+
+    assert (
+        batch_deployment_type.call_args.kwargs["environment"]
+        == create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT
+    )
+    assert "image" not in batch_deployment_type.call_args.kwargs
+    assert "code_configuration" not in batch_deployment_type.call_args.kwargs
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "",
+        "latest",
+        "azureml://registries/azureml/environments/sklearn-1.5",
+        "azureml://registries/azureml/environments/sklearn-1.5/labels/latest",
+        "azureml://registries/azureml/environments/sklearn-1.5/versions/latest",
+        "azureml:sklearn-1.5@latest",
+        "azureml:sklearn-1.5:latest",
+        "mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04:latest",
+        "conda.yml",
+    ],
+)
+def test_batch_deployment_rejects_mutable_environment_reference(
+    monkeypatch,
+    reference,
+):
+    create_client = Mock()
+    monkeypatch.setattr(create_batch_deployment, "create_ml_client", create_client)
+    args = _batch_deployment_args()
+    args.environment = reference
+
+    with pytest.raises(argparse.ArgumentTypeError, match="immutable|numeric version"):
+        create_batch_deployment.run(args)
+
+    create_client.assert_not_called()
+
+
+def test_batch_workflow_uses_pinned_curated_environment():
+    workflow = (
+        Path(__file__).parents[1]
+        / ".github"
+        / "workflows"
+        / "python-sdk-v2-batch.yml"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        "default: "
+        "azureml://registries/azureml/environments/sklearn-1.5/versions/53"
+    ) in workflow
+    assert "DEPLOYMENT_ENVIRONMENT: ${{ inputs.deployment_environment }}" in workflow
+    assert '--environment "$DEPLOYMENT_ENVIRONMENT"' in workflow
+
+
+def test_batch_cli_defaults_to_immutable_prebuilt_environment(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "create_batch_deployment.py",
+            "--subscription_id",
+            "sub",
+            "--resource_group",
+            "rg",
+            "--workspace_name",
+            "ws",
+            "--deployment_name",
+            "batch-deployment",
+            "--endpoint_name",
+            "batch-endpoint",
+            "--model_name",
+            "model",
+            "--model_version",
+            "1",
+            "--compute",
+            "batch-compute",
+        ],
+    )
+
+    args = create_batch_deployment.parse_args()
+
+    assert args.environment == create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT
+
+
 def _batch_endpoint_args():
     return argparse.Namespace(
         endpoint_name="batch-endpoint",
@@ -660,6 +788,7 @@ def _batch_deployment_args():
         model_name="model",
         model_version="1",
         compute="batch-compute",
+        environment=create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
         instance_count=1,
         max_concurrency_per_instance=1,
         mini_batch_size=10,

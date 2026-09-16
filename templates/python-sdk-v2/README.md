@@ -32,12 +32,19 @@ The training workflow outputs `training_job_name`, `model_name`, and
 `model_version`. Its `model_output_name` defaults to `model` and its
 `model_type` defaults to `mlflow_model`. The batch workflow requires its
 endpoint and model inputs plus `compute`, `request_batch_file`, and optionally
-`request_type`, and outputs the endpoint and deployment names.
+`request_type`, and outputs the endpoint and deployment names. Its
+`deployment_environment` defaults to the immutable curated environment
+`azureml://registries/azureml/environments/sklearn-1.5/versions/53`. Override it
+only with another versioned Azure ML environment reference. Supplying an
+explicit prebuilt environment prevents Azure ML from generating an anonymous
+Conda environment and workspace image build, which is incompatible with
+workspaces that enforce `allowSharedKeyAccess=false`.
 
 The online workflow targets an Azure ML **Kubernetes online endpoint**, not a
 managed online endpoint. Its required serving inputs are:
 
-- `compute`: an existing Azure ML Kubernetes compute backed by an Azure
+- `compute`: an existing Azure ML Kubernetes compute backed by either a direct
+  AKS `Microsoft.ContainerService/managedClusters` resource or an Azure
   Arc-enabled `Microsoft.Kubernetes/connectedClusters` resource
 - `environment_name` and `environment_version`: an existing, versioned Azure ML
   environment whose only runtime source is a prebuilt image pinned by
@@ -58,10 +65,11 @@ namespace, and have a user-assigned managed identity. The compute identity
 pulls the prebuilt image and accesses required Azure resources; the workflow
 never reads AKS credentials or uses the AKS node identity.
 
-Do not attach a local-accounts-disabled AKS cluster directly to Azure ML. The
-Azure ML extension does not support that direct attachment mode. Use an
-Azure Arc-enabled Kubernetes attachment or a separate supported secure cluster;
-do not enable AKS local accounts to make deployment work.
+For direct AKS with local accounts disabled, infrastructure must create the
+per-workspace AKS Trusted Access role binding for
+`Microsoft.MachineLearningServices/workspaces/mlworkload` before attaching the
+compute. Do not enable AKS local accounts. Azure Arc-enabled Kubernetes remains
+a supported fallback when Trusted Access isn't available.
 
 Infrastructure must install the Azure ML extension with inference enabled and
 HTTPS preserved. At minimum, configure `enableInference=true`,
@@ -85,6 +93,8 @@ path and fail with an actionable error if the referenced model is not MLflow.
 For online serving, the explicit registered environment prevents Azure ML from
 creating an anonymous environment or starting a workspace image build. This is
 required when workspace storage enforces `allowSharedKeyAccess=false`.
+Batch deployment rejects mutable labels, `latest`, unversioned references,
+images, and inline Conda environments before any Azure ML operation.
 
 ## Consumer migration
 

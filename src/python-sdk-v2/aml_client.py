@@ -462,11 +462,18 @@ def get_kubernetes_online_compute(ml_client: MLClient, compute_name: str) -> Any
         )
 
     resource_id = str(getattr(compute, "resource_id", "") or "")
-    if "/providers/microsoft.kubernetes/connectedclusters/" not in resource_id.lower():
+    supported_cluster_resource_types = (
+        "/providers/microsoft.containerservice/managedclusters/",
+        "/providers/microsoft.kubernetes/connectedclusters/",
+    )
+    if not any(
+        resource_type in resource_id.lower()
+        for resource_type in supported_cluster_resource_types
+    ):
         raise RuntimeError(
-            f"Azure ML Kubernetes compute '{compute_name}' must be backed by an "
-            "Azure Arc-enabled Kubernetes connectedClusters resource. Direct AKS "
-            "attachment is unsupported when AKS local accounts are disabled."
+            f"Azure ML Kubernetes compute '{compute_name}' must be backed by a "
+            "direct AKS managedClusters resource or an Azure Arc-enabled "
+            "Kubernetes connectedClusters resource."
         )
 
     provisioning_state = str(getattr(compute, "provisioning_state", ""))
