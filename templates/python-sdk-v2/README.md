@@ -34,8 +34,14 @@ The training workflow outputs `training_job_name`, `model_name`, and
 `deployment_name`, `model_name`, `model_version`, and `request_file`, and outputs
 the endpoint and deployment names. The batch workflow requires those endpoint
 and model inputs plus `compute`, `request_batch_file`, and optionally
-`request_type`, and also outputs the endpoint and deployment names. Each accepts
-an optional `runner` label (default `ubuntu-24.04`).
+`request_type`, and also outputs the endpoint and deployment names. Its
+`deployment_environment` defaults to the immutable curated environment
+`azureml://registries/azureml/environments/sklearn-1.5/versions/53`. Override it
+only with another versioned Azure ML environment reference. Supplying an
+explicit prebuilt environment prevents Azure ML from generating an anonymous
+Conda environment and workspace image build, which is incompatible with
+workspaces that enforce `allowSharedKeyAccess=false`. Each workflow accepts an
+optional `runner` label (default `ubuntu-24.04`).
 
 Outside CI, the scripts use `DefaultAzureCredential` for local development with
 interactive browser and managed identity credentials excluded. Sign in with
@@ -48,6 +54,7 @@ long-running operations, and test the deployment. Batch invocation waits for a
 terminal job state and fails the workflow with parent and child-job diagnostics.
 The deployment workflows intentionally use Azure ML's MLflow no-code deployment
 path and fail with an actionable error if the referenced model is not MLflow.
+Batch deployment also rejects mutable or unversioned environment references.
 
 Promote to `test` or `prod` by calling the same reusable workflow with a
 different GitHub Environment and environment-scoped OIDC secrets and variables.

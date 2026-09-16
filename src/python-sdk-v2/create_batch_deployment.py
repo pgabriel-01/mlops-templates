@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 
 import argparse
+import re
 
 from azure.ai.ml.constants import BatchDeploymentOutputAction
 from azure.ai.ml.entities import BatchDeployment
@@ -11,6 +12,16 @@ from aml_client import (
     create_ml_client,
     get_registered_model,
     wait_for_resource_create_or_update,
+)
+
+IMMUTABLE_ENVIRONMENT_PATTERNS = (
+    re.compile(
+        r"azureml://registries/[^/]+/environments/[^/]+/versions/[^/]+"
+    ),
+    re.compile(r"azureml:[^:/@]+:[^:/@]+"),
+    re.compile(
+        r"azureml:/subscriptions/.+/environments/[^/]+/versions/[^/]+"
+    ),
 )
 
 
@@ -25,6 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model_name", required=True)
     parser.add_argument("--model_version", required=True)
     parser.add_argument("--compute", required=True)
+    parser.add_argument("--environment", required=True)
     parser.add_argument("--instance_count", type=int, default=2)
     parser.add_argument("--max_concurrency_per_instance", type=int, default=4)
     parser.add_argument("--mini_batch_size", type=int, default=32)
@@ -40,11 +52,13 @@ def run(args: argparse.Namespace):
         args.model_version,
         require_mlflow=True,
     )
+    environment = validate_immutable_environment_reference(args.environment)
     deployment = BatchDeployment(
         name=args.deployment_name,
         description=args.description,
         endpoint_name=args.endpoint_name,
         model=model.id,
+        environment=environment,
         compute=args.compute,
         instance_count=args.instance_count,
         max_concurrency_per_instance=args.max_concurrency_per_instance,
@@ -67,6 +81,17 @@ def run(args: argparse.Namespace):
         lambda: ml_client.batch_endpoints.begin_create_or_update(endpoint),
         lambda: ml_client.batch_endpoints.get(args.endpoint_name),
         f"batch endpoint {args.endpoint_name}",
+    )
+
+
+def validate_immutable_environment_reference(reference: str) -> str:
+    value = reference.strip()
+    if any(pattern.fullmatch(value) for pattern in IMMUTABLE_ENVIRONMENT_PATTERNS):
+        return value
+    raise ValueError(
+        "Batch deployment environment must be an immutable version reference, "
+        "for example "
+        "azureml://registries/azureml/environments/sklearn-1.5/versions/53"
     )
 
 

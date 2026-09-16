@@ -33,6 +33,11 @@ on:
       compute:
         required: true
         type: string
+      deployment_environment:
+        description: Immutable Azure ML environment version for batch inference.
+        required: false
+        default: azureml://registries/azureml/environments/sklearn-1.5/versions/53
+        type: string
       request_batch_file:
         required: true
         type: string
@@ -118,6 +123,7 @@ jobs:
           MODEL_NAME: ${{ inputs.model_name }}
           MODEL_VERSION: ${{ inputs.model_version }}
           COMPUTE: ${{ inputs.compute }}
+          DEPLOYMENT_ENVIRONMENT: ${{ inputs.deployment_environment }}
         run: |
           python .mlops-python-sdk/src/python-sdk-v2/create_batch_deployment.py \
             --subscription_id "$AZURE_SUBSCRIPTION_ID" \
@@ -127,7 +133,8 @@ jobs:
             --deployment_name "$DEPLOYMENT_NAME" \
             --model_name "$MODEL_NAME" \
             --model_version "$MODEL_VERSION" \
-            --compute "$COMPUTE"
+            --compute "$COMPUTE" \
+            --environment "$DEPLOYMENT_ENVIRONMENT"
       - name: Invoke endpoint and require successful completion
         env:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
