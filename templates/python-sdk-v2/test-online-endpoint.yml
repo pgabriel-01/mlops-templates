@@ -2,6 +2,12 @@
 # Licensed under the MIT License.
 
 parameters:
+- name: subscription_id
+  type: string
+- name: resource_group
+  type: string
+- name: workspace_name
+  type: string
 - name: endpoint_name
   type: string
 - name: sample_request
@@ -18,6 +24,8 @@ steps:
     inlineScript: |
 
       python templates/src/python-sdk-v2/test_online_endpoint.py \
+        --subscription_id "${{parameters.subscription_id}}" \
+        --resource_group "${{parameters.resource_group}}" \
+        --workspace_name "${{parameters.workspace_name}}" \
         --endpoint_name "${{parameters.endpoint_name}}" \
         --request_file "${{parameters.sample_request}}" \
-

@@ -1,11 +1,13 @@
 import argparse
 import importlib
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, call
 
 import pytest
+import yaml
 from azure.core.exceptions import ResourceExistsError
 
 SDK_PATH = Path(__file__).parents[1] / "src" / "python-sdk-v2"
@@ -15,6 +17,7 @@ aml_client = importlib.import_module("aml_client")
 create_batch_deployment = importlib.import_module("create_batch_deployment")
 create_batch_endpoint = importlib.import_module("create_batch_endpoint")
 create_online_deployment = importlib.import_module("create_online_deployment")
+create_online_endpoint = importlib.import_module("create_online_endpoint")
 test_batch_endpoint = importlib.import_module("test_batch_endpoint")
 train_and_register_model = importlib.import_module("train_and_register_model")
 
@@ -122,35 +125,330 @@ def test_reusable_workflows_force_azure_cli_credential_mode():
         assert "AZUREML_CREDENTIAL_MODE: azure-cli" in workflow
 
 
-def test_online_traffic_update_uses_online_endpoint_operation(monkeypatch):
+def test_online_workflow_requires_private_kubernetes_contract():
+    workflow_path = (
+        Path(__file__).parents[1]
+        / ".github"
+        / "workflows"
+        / "python-sdk-v2-online.yml"
+    )
+    workflow = workflow_path.read_text(encoding="utf-8")
+    parsed = yaml.safe_load(workflow)
+    inputs = parsed[True]["workflow_call"]["inputs"]
+
+    for required_input in (
+        "runner",
+        "compute",
+        "environment_name",
+        "environment_version",
+        "instance_type",
+        "instance_count",
+    ):
+        assert required_input in inputs
+    assert inputs["runner"]["required"] is True
+    assert inputs["compute"]["required"] is True
+    assert inputs["environment_name"]["required"] is True
+    assert inputs["environment_version"]["required"] is True
+    assert inputs["instance_type"]["required"] is True
+    assert "ubuntu-24.04" not in workflow
+    assert "Standard_DS2_v2" not in workflow
+    assert "--compute \"$COMPUTE\"" in workflow
+    assert "--environment_name \"$ENVIRONMENT_NAME\"" in workflow
+    assert "--environment_version \"$ENVIRONMENT_VERSION\"" in workflow
+    action_refs = re.findall(r"uses:\s+\S+@(\S+)", workflow)
+    assert action_refs
+    assert all(re.fullmatch(r"[0-9a-f]{40}", ref) for ref in action_refs)
+
+
+def test_online_yaml_assets_are_valid():
+    repository_root = Path(__file__).parents[1]
+    paths = [
+        repository_root / ".github/workflows/python-sdk-v2-online.yml",
+        repository_root / "templates/python-sdk-v2/create-online-endpoint.yml",
+        repository_root / "templates/python-sdk-v2/create-online-deployment.yml",
+        repository_root / "templates/python-sdk-v2/test-online-endpoint.yml",
+    ]
+
+    for path in paths:
+        assert yaml.safe_load(path.read_text(encoding="utf-8")) is not None
+
+
+def test_online_endpoint_uses_attached_arc_kubernetes_compute(monkeypatch):
+    client = Mock()
+    compute = _arc_kubernetes_compute()
+    client.compute.get.return_value = compute
+    endpoint_poller = Mock()
+    endpoint_poller.result.return_value = SimpleNamespace(
+        provisioning_state="Succeeded"
+    )
+    client.online_endpoints.begin_create_or_update.return_value = endpoint_poller
+    client.online_endpoints.get.return_value = SimpleNamespace(
+        provisioning_state="Succeeded"
+    )
+    endpoint_type = Mock(return_value="kubernetes-endpoint")
+    monkeypatch.setattr(create_online_endpoint, "create_ml_client", lambda _: client)
+    monkeypatch.setattr(
+        create_online_endpoint,
+        "KubernetesOnlineEndpoint",
+        endpoint_type,
+    )
+
+    result = create_online_endpoint.run(_online_endpoint_args())
+
+    assert result.provisioning_state == "Succeeded"
+    client.compute.get.assert_called_once_with("arc-inference")
+    endpoint_type.assert_called_once_with(
+        name="endpoint",
+        description=None,
+        auth_mode="aml_token",
+        compute=compute.id,
+    )
+    client.online_endpoints.begin_create_or_update.assert_called_once_with(
+        "kubernetes-endpoint"
+    )
+
+
+def test_online_compute_accepts_direct_aks_attachment_with_uami():
+    client = Mock()
+    compute = _arc_kubernetes_compute()
+    compute.resource_id = (
+        "/subscriptions/sub/resourceGroups/rg/providers/"
+        "Microsoft.ContainerService/managedClusters/private-aks"
+    )
+    client.compute.get.return_value = compute
+
+    result = aml_client.get_kubernetes_online_compute(client, "direct-aks")
+
+    assert result is compute
+
+
+def test_online_compute_rejects_unsupported_cluster_resource():
+    client = Mock()
+    compute = _arc_kubernetes_compute()
+    compute.resource_id = (
+        "/subscriptions/sub/resourceGroups/rg/providers/"
+        "Microsoft.Compute/virtualMachines/not-kubernetes"
+    )
+    client.compute.get.return_value = compute
+
+    with pytest.raises(RuntimeError, match="direct AKS managedClusters"):
+        aml_client.get_kubernetes_online_compute(client, "not-kubernetes")
+
+
+def test_online_compute_requires_dedicated_namespace_and_uami():
+    client = Mock()
+    compute = _arc_kubernetes_compute()
+    compute.namespace = "default"
+    client.compute.get.return_value = compute
+
+    with pytest.raises(RuntimeError, match="dedicated non-default namespace"):
+        aml_client.get_kubernetes_online_compute(client, "arc-inference")
+
+    compute.namespace = "azureml-inference"
+    compute.identity = SimpleNamespace(
+        type="system_assigned",
+        user_assigned_identities=None,
+    )
+    with pytest.raises(RuntimeError, match="user-assigned managed identity"):
+        aml_client.get_kubernetes_online_compute(client, "arc-inference")
+
+
+def test_prebuilt_environment_contract_requires_digest_and_no_build():
+    client = Mock()
+    client.environments.get.return_value = SimpleNamespace(
+        id="azureml:/environments/inference/versions/7",
+        image="private.azurecr.io/inference@sha256:" + ("a" * 64),
+        build=None,
+        conda_file=None,
+    )
+
+    result = aml_client.get_prebuilt_environment(client, "inference", "7")
+
+    assert result.id == "azureml:/environments/inference/versions/7"
+    client.environments.get.assert_called_once_with(
+        name="inference",
+        version="7",
+    )
+
+
+@pytest.mark.parametrize(
+    ("image", "build", "conda_file", "message"),
+    [
+        (
+            "private.azurecr.io/inference:latest",
+            None,
+            None,
+            "sha256 digest",
+        ),
+        (
+            "private.azurecr.io/inference@sha256:" + ("a" * 64),
+            SimpleNamespace(path="."),
+            None,
+            "image-only environment",
+        ),
+        (
+            "private.azurecr.io/inference@sha256:" + ("a" * 64),
+            None,
+            "conda.yaml",
+            "image-only environment",
+        ),
+    ],
+)
+def test_prebuilt_environment_rejects_mutable_or_buildable_assets(
+    image,
+    build,
+    conda_file,
+    message,
+):
+    client = Mock()
+    client.environments.get.return_value = SimpleNamespace(
+        image=image,
+        build=build,
+        conda_file=conda_file,
+    )
+
+    with pytest.raises(RuntimeError, match=message):
+        aml_client.get_prebuilt_environment(client, "inference", "7")
+
+
+def test_online_deployment_uses_kubernetes_and_exact_environment(monkeypatch):
     client = Mock()
     client.models.get.return_value = SimpleNamespace(
         id="azureml:model:1",
         type="mlflow_model",
     )
-    client.online_deployments.begin_create_or_update.return_value.result.return_value = (
-        Mock()
+    environment = SimpleNamespace(
+        id="azureml:/environments/inference/versions/7",
+        image="private.azurecr.io/inference@sha256:" + ("a" * 64),
+        build=None,
+        conda_file=None,
     )
-    endpoint = SimpleNamespace(traffic={})
+    client.environments.get.return_value = environment
+    deployment_poller = Mock()
+    deployment_poller.result.return_value = SimpleNamespace(
+        provisioning_state="Succeeded"
+    )
+    client.online_deployments.begin_create_or_update.return_value = deployment_poller
+    client.online_deployments.get.return_value = SimpleNamespace(
+        provisioning_state="Succeeded"
+    )
+    endpoint = SimpleNamespace(traffic={}, provisioning_state="Succeeded")
     client.online_endpoints.get.return_value = endpoint
-    client.online_endpoints.begin_create_or_update.return_value.result.return_value = (
-        endpoint
-    )
+    endpoint_poller = Mock()
+    endpoint_poller.result.return_value = endpoint
+    client.online_endpoints.begin_create_or_update.return_value = endpoint_poller
+    deployment_type = Mock(return_value="kubernetes-deployment")
     monkeypatch.setattr(create_online_deployment, "create_ml_client", lambda _: client)
-    args = argparse.Namespace(
-        deployment_name="blue",
-        endpoint_name="endpoint",
-        model_name="model",
-        model_version="1",
-        instance_type="Standard_DS2_v2",
-        instance_count=1,
-        traffic_allocation=100,
+    monkeypatch.setattr(
+        create_online_deployment,
+        "KubernetesOnlineDeployment",
+        deployment_type,
     )
 
-    create_online_deployment.run(args)
+    create_online_deployment.run(_online_deployment_args())
 
     assert endpoint.traffic == {"blue": 100}
+    deployment_type.assert_called_once_with(
+        name="blue",
+        endpoint_name="endpoint",
+        model="azureml:model:1",
+        environment=environment.id,
+        instance_type="cpu-small",
+        instance_count=2,
+    )
+    client.online_deployments.begin_create_or_update.assert_called_once_with(
+        "kubernetes-deployment"
+    )
     client.online_endpoints.begin_create_or_update.assert_called_once_with(endpoint)
+
+
+def test_online_deployment_repeat_update_waits_before_traffic(monkeypatch):
+    events = []
+    client = Mock()
+    client.models.get.return_value = SimpleNamespace(
+        id="azureml:model:1",
+        type="mlflow_model",
+    )
+    client.environments.get.return_value = SimpleNamespace(
+        id="azureml:/environments/inference/versions/7",
+        image="private.azurecr.io/inference@sha256:" + ("a" * 64),
+        build=None,
+        conda_file=None,
+    )
+    successful_poller = Mock()
+    successful_poller.result.side_effect = lambda: (
+        events.append("deployment-result")
+        or SimpleNamespace(provisioning_state="Succeeded")
+    )
+    client.online_deployments.begin_create_or_update.side_effect = [
+        ResourceExistsError("operation already in progress"),
+        successful_poller,
+    ]
+    client.online_deployments.get.side_effect = [
+        SimpleNamespace(provisioning_state="Updating"),
+        SimpleNamespace(provisioning_state="Succeeded"),
+        SimpleNamespace(provisioning_state="Succeeded"),
+    ]
+    endpoint = SimpleNamespace(traffic={}, provisioning_state="Succeeded")
+    client.online_endpoints.get.return_value = endpoint
+    endpoint_poller = Mock()
+    endpoint_poller.result.side_effect = lambda: (
+        events.append("traffic-result") or endpoint
+    )
+    client.online_endpoints.begin_create_or_update.return_value = endpoint_poller
+    monkeypatch.setattr(create_online_deployment, "create_ml_client", lambda _: client)
+    monkeypatch.setattr(aml_client.time, "sleep", lambda _: events.append("state-check"))
+
+    create_online_deployment.run(_online_deployment_args())
+
+    assert client.online_deployments.begin_create_or_update.call_count == 2
+    assert events == ["state-check", "deployment-result", "traffic-result"]
+    assert endpoint.traffic == {"blue": 100}
+
+
+def test_online_endpoint_completes_before_deployment_begins(monkeypatch):
+    events = []
+    client = Mock()
+    client.compute.get.return_value = _arc_kubernetes_compute()
+    client.models.get.return_value = SimpleNamespace(
+        id="azureml:model:1",
+        type="mlflow_model",
+    )
+    client.environments.get.return_value = SimpleNamespace(
+        id="azureml:/environments/inference/versions/7",
+        image="private.azurecr.io/inference@sha256:" + ("a" * 64),
+        build=None,
+        conda_file=None,
+    )
+    endpoint_poller = Mock()
+    endpoint_poller.result.side_effect = lambda: (
+        events.append("endpoint-result")
+        or SimpleNamespace(provisioning_state="Succeeded")
+    )
+    endpoint = SimpleNamespace(traffic={}, provisioning_state="Succeeded")
+    client.online_endpoints.begin_create_or_update.side_effect = [
+        endpoint_poller,
+        Mock(result=Mock(return_value=endpoint)),
+    ]
+    client.online_endpoints.get.return_value = endpoint
+    deployment_poller = Mock()
+    deployment_poller.result.side_effect = lambda: (
+        events.append("deployment-result")
+        or SimpleNamespace(provisioning_state="Succeeded")
+    )
+    client.online_deployments.begin_create_or_update.side_effect = lambda _: (
+        events.append("deployment-begin") or deployment_poller
+    )
+    client.online_deployments.get.return_value = SimpleNamespace(
+        provisioning_state="Succeeded"
+    )
+    monkeypatch.setattr(create_online_endpoint, "create_ml_client", lambda _: client)
+    monkeypatch.setattr(create_online_deployment, "create_ml_client", lambda _: client)
+
+    create_online_endpoint.run(_online_endpoint_args())
+    create_online_deployment.run(_online_deployment_args())
+
+    assert events.index("endpoint-result") < events.index("deployment-begin")
 
 
 def test_missing_registered_model_has_actionable_error():
@@ -438,6 +736,47 @@ def _batch_endpoint_args():
         endpoint_name="batch-endpoint",
         description=None,
         auth_mode="aad_token",
+    )
+
+
+def _arc_kubernetes_compute():
+    return SimpleNamespace(
+        id="azureml:/subscriptions/sub/resourceGroups/rg/providers/"
+        "Microsoft.MachineLearningServices/workspaces/ws/computes/arc-inference",
+        type="Kubernetes",
+        resource_id="/subscriptions/sub/resourceGroups/rg/providers/"
+        "Microsoft.Kubernetes/connectedClusters/private-inference",
+        provisioning_state="Succeeded",
+        namespace="azureml-inference",
+        identity=SimpleNamespace(
+            type="user_assigned",
+            user_assigned_identities=[
+                SimpleNamespace(resource_id="/subscriptions/sub/uami")
+            ],
+        ),
+    )
+
+
+def _online_endpoint_args():
+    return argparse.Namespace(
+        endpoint_name="endpoint",
+        compute="arc-inference",
+        description=None,
+        auth_mode="aml_token",
+    )
+
+
+def _online_deployment_args():
+    return argparse.Namespace(
+        deployment_name="blue",
+        endpoint_name="endpoint",
+        model_name="model",
+        model_version="1",
+        environment_name="inference",
+        environment_version="7",
+        instance_type="cpu-small",
+        instance_count=2,
+        traffic_allocation=100,
     )
 
 

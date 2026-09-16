@@ -2,13 +2,30 @@
 # Licensed under the MIT License.
 
 parameters:
+- name: subscription_id
+  type: string
+- name: resource_group
+  type: string
+- name: workspace_name
+  type: string
 - name: endpoint_name
   type: string
 - name: deployment_name
   type: string
-- name: model_path
+- name: model_name
   type: string
+- name: model_version
+  type: string
+- name: environment_name
+  type: string
+- name: environment_version
+  type: string
+- name: instance_type
+  type: string
+- name: instance_count
+  type: number
 - name: traffic_allocation
+  type: number
 
 
 steps:
@@ -22,9 +39,15 @@ steps:
     inlineScript: |
 
       python templates/src/python-sdk-v2/create_online_deployment.py \
+        --subscription_id "${{parameters.subscription_id}}" \
+        --resource_group "${{parameters.resource_group}}" \
+        --workspace_name "${{parameters.workspace_name}}" \
         --endpoint_name "${{parameters.endpoint_name}}" \
         --deployment_name "${{parameters.deployment_name}}" \
-        --model_path "${{parameters.model_path}}" \
+        --model_name "${{parameters.model_name}}" \
+        --model_version "${{parameters.model_version}}" \
+        --environment_name "${{parameters.environment_name}}" \
+        --environment_version "${{parameters.environment_version}}" \
+        --instance_type "${{parameters.instance_type}}" \
+        --instance_count "${{parameters.instance_count}}" \
         --traffic_allocation "${{parameters.traffic_allocation}}" \
-
-
