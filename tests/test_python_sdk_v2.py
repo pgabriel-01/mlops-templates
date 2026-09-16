@@ -1,5 +1,6 @@
 import argparse
 import importlib
+import importlib.util
 import re
 import sys
 from pathlib import Path
@@ -20,6 +21,14 @@ create_online_deployment = importlib.import_module("create_online_deployment")
 create_online_endpoint = importlib.import_module("create_online_endpoint")
 test_batch_endpoint = importlib.import_module("test_batch_endpoint")
 train_and_register_model = importlib.import_module("train_and_register_model")
+batch_scoring_spec = importlib.util.spec_from_file_location(
+    "batch_scoring_score",
+    SDK_PATH / "batch_scoring" / "score.py",
+)
+assert batch_scoring_spec is not None
+assert batch_scoring_spec.loader is not None
+batch_scoring_score = importlib.util.module_from_spec(batch_scoring_spec)
+batch_scoring_spec.loader.exec_module(batch_scoring_score)
 
 @pytest.mark.parametrize("ci_environment", ["GITHUB_ACTIONS", "CI"])
 def test_ci_uses_validated_azure_cli_credential(monkeypatch, ci_environment):
@@ -660,21 +669,48 @@ def test_batch_deployment_uses_explicit_immutable_environment(monkeypatch):
     endpoint_poller.result.return_value = endpoint
     client.batch_endpoints.begin_create_or_update.return_value = endpoint_poller
     batch_deployment_type = Mock(return_value=SimpleNamespace())
+    code_configuration = SimpleNamespace(
+        code=str(create_batch_deployment.DEFAULT_BATCH_CODE_PATH.resolve()),
+        scoring_script=create_batch_deployment.DEFAULT_BATCH_SCORING_SCRIPT,
+    )
+    code_configuration_type = Mock(return_value=code_configuration)
     monkeypatch.setattr(create_batch_deployment, "create_ml_client", lambda _: client)
     monkeypatch.setattr(
         create_batch_deployment,
         "BatchDeployment",
         batch_deployment_type,
     )
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "CodeConfiguration",
+        code_configuration_type,
+    )
 
     create_batch_deployment.run(_batch_deployment_args())
 
+    deployment_kwargs = batch_deployment_type.call_args.kwargs
     assert (
-        batch_deployment_type.call_args.kwargs["environment"]
-        == create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT
+        deployment_kwargs["environment"]
+        == "azureml://registries/azureml/environments/sklearn-1.5/versions/53"
     )
-    assert "image" not in batch_deployment_type.call_args.kwargs
-    assert "code_configuration" not in batch_deployment_type.call_args.kwargs
+    assert deployment_kwargs["code_configuration"] is code_configuration
+    assert "image" not in deployment_kwargs
+    code_configuration_type.assert_called_once_with(
+        code=str(create_batch_deployment.DEFAULT_BATCH_CODE_PATH.resolve()),
+        scoring_script="score.py",
+    )
+
+
+def test_batch_deployment_rejects_missing_scoring_code_before_azure(monkeypatch):
+    create_client = Mock()
+    monkeypatch.setattr(create_batch_deployment, "create_ml_client", create_client)
+    args = _batch_deployment_args()
+    args.scoring_script = "missing.py"
+
+    with pytest.raises(argparse.ArgumentTypeError, match="does not exist"):
+        create_batch_deployment.run(args)
+
+    create_client.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -720,6 +756,13 @@ def test_batch_workflow_uses_pinned_curated_environment():
     ) in workflow
     assert "DEPLOYMENT_ENVIRONMENT: ${{ inputs.deployment_environment }}" in workflow
     assert '--environment "$DEPLOYMENT_ENVIRONMENT"' in workflow
+    assert (
+        "BATCH_SCORING_CODE: .mlops-python-sdk/src/python-sdk-v2/batch_scoring"
+        in workflow
+    )
+    assert "BATCH_SCORING_SCRIPT: score.py" in workflow
+    assert '--code_path "$BATCH_SCORING_CODE"' in workflow
+    assert '--scoring_script "$BATCH_SCORING_SCRIPT"' in workflow
 
 
 def test_batch_cli_defaults_to_immutable_prebuilt_environment(monkeypatch):
@@ -750,6 +793,38 @@ def test_batch_cli_defaults_to_immutable_prebuilt_environment(monkeypatch):
     args = create_batch_deployment.parse_args()
 
     assert args.environment == create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT
+    assert args.code_path == str(create_batch_deployment.DEFAULT_BATCH_CODE_PATH)
+    assert (
+        args.scoring_script
+        == create_batch_deployment.DEFAULT_BATCH_SCORING_SCRIPT
+    )
+
+
+def test_batch_scoring_loads_registered_mlflow_model_and_returns_append_rows(
+    monkeypatch,
+    tmp_path,
+):
+    model_directory = tmp_path / "registered-model"
+    model_directory.mkdir()
+    (model_directory / "MLmodel").write_text("flavors: {}", encoding="utf-8")
+    input_file = tmp_path / "input.csv"
+    input_file.write_text("feature\n2\n4\n", encoding="utf-8")
+    model = Mock()
+    model.predict.side_effect = lambda frame: frame["feature"] * 3
+    load_model = Mock(return_value=model)
+    monkeypatch.setenv("AZUREML_MODEL_DIR", str(model_directory))
+    monkeypatch.setattr(batch_scoring_score, "_load_mlflow_model", load_model)
+    monkeypatch.setattr(batch_scoring_score, "MODEL", None)
+
+    batch_scoring_score.init()
+    result = batch_scoring_score.run([str(input_file)])
+
+    load_model.assert_called_once_with(model_directory)
+    assert list(result.columns) == ["source_file", "source_row", "prediction"]
+    assert result.to_dict(orient="records") == [
+        {"source_file": "input.csv", "source_row": 0, "prediction": 6},
+        {"source_file": "input.csv", "source_row": 1, "prediction": 12},
+    ]
 
 
 def _batch_endpoint_args():
@@ -810,6 +885,8 @@ def _batch_deployment_args():
         model_version="1",
         compute="batch-compute",
         environment=create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+        code_path=str(create_batch_deployment.DEFAULT_BATCH_CODE_PATH),
+        scoring_script=create_batch_deployment.DEFAULT_BATCH_SCORING_SCRIPT,
         instance_count=1,
         max_concurrency_per_instance=1,
         mini_batch_size=10,

@@ -3,9 +3,10 @@
 
 import argparse
 import re
+from pathlib import Path
 
 from azure.ai.ml.constants import BatchDeploymentOutputAction
-from azure.ai.ml.entities import BatchDeployment
+from azure.ai.ml.entities import BatchDeployment, CodeConfiguration
 
 from aml_client import (
     add_workspace_arguments,
@@ -17,6 +18,8 @@ from aml_client import (
 DEFAULT_BATCH_ENVIRONMENT = (
     "azureml://registries/azureml/environments/sklearn-1.5/versions/53"
 )
+DEFAULT_BATCH_CODE_PATH = Path(__file__).with_name("batch_scoring")
+DEFAULT_BATCH_SCORING_SCRIPT = "score.py"
 IMMUTABLE_ENVIRONMENT_PATTERNS = (
     re.compile(
         r"azureml://registries/[^/\s]+/environments/[^/\s]+/versions/\d+"
@@ -52,6 +55,38 @@ def validate_immutable_environment_reference(reference: str) -> str:
     return normalized_reference
 
 
+def create_code_configuration(
+    code_path: str | Path,
+    scoring_script: str,
+) -> CodeConfiguration:
+    code_directory = Path(code_path).expanduser().resolve()
+    normalized_scoring_script = scoring_script.strip()
+    if not normalized_scoring_script:
+        raise argparse.ArgumentTypeError("A batch scoring script is required.")
+
+    scoring_path = (code_directory / normalized_scoring_script).resolve()
+    try:
+        scoring_path.relative_to(code_directory)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "Batch scoring script must be inside the configured code directory."
+        ) from exc
+
+    if not code_directory.is_dir():
+        raise argparse.ArgumentTypeError(
+            f"Batch scoring code directory does not exist: {code_directory}"
+        )
+    if not scoring_path.is_file():
+        raise argparse.ArgumentTypeError(
+            f"Batch scoring script does not exist: {scoring_path}"
+        )
+
+    return CodeConfiguration(
+        code=str(code_directory),
+        scoring_script=scoring_path.relative_to(code_directory).as_posix(),
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Create or update a batch deployment and make it the default."
@@ -69,6 +104,16 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_BATCH_ENVIRONMENT,
         help="Immutable versioned Azure ML environment reference.",
     )
+    parser.add_argument(
+        "--code_path",
+        default=str(DEFAULT_BATCH_CODE_PATH),
+        help="Directory containing the batch scoring source.",
+    )
+    parser.add_argument(
+        "--scoring_script",
+        default=DEFAULT_BATCH_SCORING_SCRIPT,
+        help="Scoring script path relative to --code_path.",
+    )
     parser.add_argument("--instance_count", type=int, default=2)
     parser.add_argument("--max_concurrency_per_instance", type=int, default=4)
     parser.add_argument("--mini_batch_size", type=int, default=32)
@@ -78,6 +123,10 @@ def parse_args() -> argparse.Namespace:
 
 def run(args: argparse.Namespace):
     environment = validate_immutable_environment_reference(args.environment)
+    code_configuration = create_code_configuration(
+        args.code_path,
+        args.scoring_script,
+    )
     ml_client = create_ml_client(args)
     model = get_registered_model(
         ml_client,
@@ -85,13 +134,13 @@ def run(args: argparse.Namespace):
         args.model_version,
         require_mlflow=True,
     )
-    environment = validate_immutable_environment_reference(args.environment)
     deployment = BatchDeployment(
         name=args.deployment_name,
         description=args.description,
         endpoint_name=args.endpoint_name,
         model=model.id,
         environment=environment,
+        code_configuration=code_configuration,
         compute=args.compute,
         instance_count=args.instance_count,
         max_concurrency_per_instance=args.max_concurrency_per_instance,
@@ -115,6 +164,7 @@ def run(args: argparse.Namespace):
         lambda: ml_client.batch_endpoints.get(args.endpoint_name),
         f"batch endpoint {args.endpoint_name}",
     )
+
 
 def main() -> None:
     run(parse_args())

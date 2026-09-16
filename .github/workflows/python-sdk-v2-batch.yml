@@ -124,6 +124,8 @@ jobs:
           MODEL_VERSION: ${{ inputs.model_version }}
           COMPUTE: ${{ inputs.compute }}
           DEPLOYMENT_ENVIRONMENT: ${{ inputs.deployment_environment }}
+          BATCH_SCORING_CODE: .mlops-python-sdk/src/python-sdk-v2/batch_scoring
+          BATCH_SCORING_SCRIPT: score.py
         run: |
           python .mlops-python-sdk/src/python-sdk-v2/create_batch_deployment.py \
             --subscription_id "$AZURE_SUBSCRIPTION_ID" \
@@ -134,7 +136,9 @@ jobs:
             --model_name "$MODEL_NAME" \
             --model_version "$MODEL_VERSION" \
             --compute "$COMPUTE" \
-            --environment "$DEPLOYMENT_ENVIRONMENT"
+            --environment "$DEPLOYMENT_ENVIRONMENT" \
+            --code_path "$BATCH_SCORING_CODE" \
+            --scoring_script "$BATCH_SCORING_SCRIPT"
       - name: Invoke endpoint and require successful completion
         env:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}

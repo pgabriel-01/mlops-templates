@@ -38,7 +38,12 @@ endpoint and model inputs plus `compute`, `request_batch_file`, and optionally
 only with another versioned Azure ML environment reference. Supplying an
 explicit prebuilt environment prevents Azure ML from generating an anonymous
 Conda environment and workspace image build, which is incompatible with
-workspaces that enforce `allowSharedKeyAccess=false`.
+workspaces that enforce `allowSharedKeyAccess=false`. The workflow also supplies
+the version-controlled `src/python-sdk-v2/batch_scoring/score.py` through an
+explicit `CodeConfiguration`. This is required even for MLflow models: the
+Azure ML no-code deployment path can ignore the requested environment while
+generating its own scoring stack, which creates an anonymous environment and
+starts an `imgbldrun_*` workspace image build.
 
 The online workflow targets an Azure ML **Kubernetes online endpoint**, not a
 managed online endpoint. Its required serving inputs are:
@@ -95,7 +100,11 @@ For online serving, the explicit registered environment prevents Azure ML from
 creating an anonymous environment or starting a workspace image build. This is
 required when workspace storage enforces `allowSharedKeyAccess=false`.
 Batch deployment rejects mutable labels, `latest`, unversioned references,
-images, and inline Conda environments before any Azure ML operation.
+images, inline Conda environments, and missing scoring code before any Azure ML
+operation. The reusable scorer loads the registered model from
+`AZUREML_MODEL_DIR` with `mlflow.pyfunc`, reads CSV, Parquet, JSON, or JSON Lines
+inputs, and returns a Pandas DataFrame compatible with the deployment's
+`append_row` output action.
 
 ## Consumer migration
 
