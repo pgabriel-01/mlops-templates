@@ -18,6 +18,10 @@ create_online_deployment = importlib.import_module("create_online_deployment")
 test_batch_endpoint = importlib.import_module("test_batch_endpoint")
 train_and_register_model = importlib.import_module("train_and_register_model")
 
+CURATED_BATCH_ENVIRONMENT = (
+    "azureml://registries/azureml/environments/sklearn-1.5/versions/53"
+)
+
 
 @pytest.mark.parametrize("ci_environment", ["GITHUB_ACTIONS", "CI"])
 def test_ci_uses_validated_azure_cli_credential(monkeypatch, ci_environment):
@@ -319,6 +323,70 @@ def test_batch_endpoint_terminal_operation_failure_propagates(monkeypatch):
     client.batch_endpoints.get.assert_called_once_with("batch-endpoint")
 
 
+def test_batch_deployment_uses_explicit_immutable_environment(monkeypatch):
+    client = Mock()
+    client.models.get.return_value = SimpleNamespace(
+        id="azureml:model:1",
+        type="mlflow_model",
+    )
+    deployment_poller = Mock()
+    deployment_poller.result.return_value = SimpleNamespace(
+        provisioning_state="Succeeded"
+    )
+    client.batch_deployments.begin_create_or_update.return_value = deployment_poller
+    client.batch_deployments.get.return_value = SimpleNamespace(
+        provisioning_state="Succeeded"
+    )
+    endpoint = SimpleNamespace(
+        defaults=SimpleNamespace(deployment_name=None),
+        provisioning_state="Succeeded",
+    )
+    client.batch_endpoints.get.return_value = endpoint
+    endpoint_poller = Mock()
+    endpoint_poller.result.return_value = endpoint
+    client.batch_endpoints.begin_create_or_update.return_value = endpoint_poller
+    monkeypatch.setattr(create_batch_deployment, "create_ml_client", lambda _: client)
+
+    create_batch_deployment.run(_batch_deployment_args())
+
+    deployment = (
+        client.batch_deployments.begin_create_or_update.call_args.args[0]
+    )
+    assert deployment.environment == CURATED_BATCH_ENVIRONMENT
+    assert deployment._to_dict()["environment"] == CURATED_BATCH_ENVIRONMENT
+    assert deployment.code_configuration is None
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "azureml://registries/azureml/environments/sklearn-1.5/labels/latest",
+        "azureml:batch-inference@latest",
+        "batch-inference-ncd-env",
+        " ",
+    ],
+)
+def test_batch_deployment_rejects_mutable_environment_reference(reference):
+    with pytest.raises(ValueError, match="immutable version reference"):
+        create_batch_deployment.validate_immutable_environment_reference(reference)
+
+
+def test_batch_workflow_uses_pinned_curated_environment():
+    workflow = (
+        Path(__file__).parents[1]
+        / ".github"
+        / "workflows"
+        / "python-sdk-v2-batch.yml"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        "default: "
+        "azureml://registries/azureml/environments/sklearn-1.5/versions/53"
+    ) in workflow
+    assert "DEPLOYMENT_ENVIRONMENT: ${{ inputs.deployment_environment }}" in workflow
+    assert '--environment "$DEPLOYMENT_ENVIRONMENT"' in workflow
+
+
 def _batch_endpoint_args():
     return argparse.Namespace(
         endpoint_name="batch-endpoint",
@@ -335,6 +403,7 @@ def _batch_deployment_args():
         model_name="model",
         model_version="1",
         compute="batch-compute",
+        environment=CURATED_BATCH_ENVIRONMENT,
         instance_count=1,
         max_concurrency_per_instance=1,
         mini_batch_size=10,
