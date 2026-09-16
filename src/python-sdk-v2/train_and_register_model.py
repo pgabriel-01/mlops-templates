@@ -29,6 +29,10 @@ def parse_args() -> argparse.Namespace:
 def run(args: argparse.Namespace) -> Model:
     ml_client = create_ml_client(args)
     submitted_job = ml_client.jobs.create_or_update(load_job(source=args.job_file))
+    github_output = os.environ.get("GITHUB_OUTPUT")
+    if github_output:
+        with open(github_output, "a", encoding="utf-8") as output:
+            output.write(f"training_job_name={submitted_job.name}\n")
     completed_job = wait_for_job(ml_client, submitted_job.name)
     model_path = (
         f"azureml://jobs/{completed_job.name}/outputs/"
@@ -44,10 +48,8 @@ def run(args: argparse.Namespace) -> Model:
         f"Registered model {registered_model.name}:{registered_model.version}",
         flush=True,
     )
-    github_output = os.environ.get("GITHUB_OUTPUT")
     if github_output:
         with open(github_output, "a", encoding="utf-8") as output:
-            output.write(f"training_job_name={completed_job.name}\n")
             output.write(f"model_name={registered_model.name}\n")
             output.write(f"model_version={registered_model.version}\n")
     return registered_model
