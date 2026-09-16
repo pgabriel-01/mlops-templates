@@ -1,20 +1,24 @@
 import argparse
 import ast
+import base64
+import hashlib
 import importlib
 import os
 import re
 import sys
+import traceback
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.error import HTTPError
 from unittest.mock import Mock, call
 
 import pytest
 import yaml
 from azure.ai.ml._utils._endpoint_utils import upload_dependencies
 from azure.ai.ml.constants._common import AzureMLResourceType
-from azure.ai.ml.entities import Environment
+from azure.ai.ml.entities import BuildContext, Environment
 from azure.ai.ml.operations._operation_orchestrator import OperationOrchestrator
-from azure.core.exceptions import ResourceExistsError
+from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
 
 SDK_PATH = Path(__file__).parents[1] / "src" / "python-sdk-v2"
 sys.path.insert(0, str(SDK_PATH))
@@ -23,6 +27,16 @@ TEST_BATCH_ENVIRONMENT_ID = (
     "resourceGroups/registry-builtin-prod-eastus-01/providers/"
     "Microsoft.MachineLearningServices/registries/azureml/environments/"
     "sklearn-1.5/versions/53"
+)
+TEST_WORKSPACE_ENVIRONMENT_ID = (
+    "/subscriptions/sub/resourceGroups/rg/providers/"
+    "Microsoft.MachineLearningServices/workspaces/ws/environments/"
+    "registry-azureml-sklearn-1-5/versions/53"
+)
+TEST_REGISTRY_SOURCE_URI = "https://registry.blob.core.windows.net/environment/context"
+TEST_REGISTRY_SAS_URL = (
+    "https://registry.blob.core.windows.net/environment"
+    "?sv=2025-01-05&sig=secret-sentinel"
 )
 
 aml_client = importlib.import_module("aml_client")
@@ -33,6 +47,7 @@ create_online_endpoint = importlib.import_module("create_online_endpoint")
 test_batch_endpoint = importlib.import_module("test_batch_endpoint")
 test_online_endpoint = importlib.import_module("test_online_endpoint")
 train_and_register_model = importlib.import_module("train_and_register_model")
+
 
 @pytest.mark.parametrize("ci_environment", ["GITHUB_ACTIONS", "CI"])
 def test_ci_uses_validated_azure_cli_credential(monkeypatch, ci_environment):
@@ -158,10 +173,7 @@ def test_reusable_workflows_force_azure_cli_credential_mode():
 
 def test_online_workflow_requires_private_kubernetes_contract():
     workflow_path = (
-        Path(__file__).parents[1]
-        / ".github"
-        / "workflows"
-        / "python-sdk-v2-online.yml"
+        Path(__file__).parents[1] / ".github" / "workflows" / "python-sdk-v2-online.yml"
     )
     workflow = workflow_path.read_text(encoding="utf-8")
     parsed = yaml.safe_load(workflow)
@@ -191,33 +203,30 @@ def test_online_workflow_requires_private_kubernetes_contract():
     assert inputs["endpoint_uami_resource_id"]["required"] is False
     assert "ubuntu-24.04" not in workflow
     assert "Standard_DS2_v2" not in workflow
-    assert "--compute \"$COMPUTE\"" in workflow
-    assert 'deployment_mode_args+=(--mlflow_no_code)' in workflow
+    assert '--compute "$COMPUTE"' in workflow
+    assert "deployment_mode_args+=(--mlflow_no_code)" in workflow
     assert 'deployment_mode_args+=(--environment_name "$ENVIRONMENT_NAME")' in workflow
     assert (
         'deployment_mode_args+=(--environment_version "$ENVIRONMENT_VERSION")'
         in workflow
     )
     assert "az keyvault secret show" in workflow
-    assert "--id \"$TLS_CA_KEY_VAULT_SECRET_ID\"" in workflow
+    assert '--id "$TLS_CA_KEY_VAULT_SECRET_ID"' in workflow
     assert (
-        "REQUESTS_CA_BUNDLE: ${{ steps.private_ca.outputs.ca_bundle_path }}"
-        in workflow
+        "REQUESTS_CA_BUNDLE: ${{ steps.private_ca.outputs.ca_bundle_path }}" in workflow
     )
     assert "SSL_CERT_FILE: ${{ steps.private_ca.outputs.ca_bundle_path }}" in workflow
     assert "openssl crl2pkcs7 -nocrl -certfile" in workflow
-    assert "echo \"::add-mask::$TLS_CA_KEY_VAULT_SECRET_ID\"" in workflow
+    assert 'echo "::add-mask::$TLS_CA_KEY_VAULT_SECRET_ID"' in workflow
     assert "if: ${{ always() }}" in workflow
-    assert "rm -f -- \"$CA_BUNDLE_PATH\"" in workflow
-    assert "cat \"$ca_bundle_path\"" not in workflow
+    assert 'rm -f -- "$CA_BUNDLE_PATH"' in workflow
+    assert 'cat "$ca_bundle_path"' not in workflow
     assert "verify=false" not in workflow.lower()
     assert "--insecure" not in workflow.lower()
     steps = parsed["jobs"]["deploy_test"]["steps"]
     invoke_step = next(step for step in steps if step["name"] == "Invoke endpoint")
     cleanup_step = next(
-        step
-        for step in steps
-        if step["name"] == "Remove private endpoint CA bundle"
+        step for step in steps if step["name"] == "Remove private endpoint CA bundle"
     )
     assert invoke_step["env"]["REQUESTS_CA_BUNDLE"] == (
         "${{ steps.private_ca.outputs.ca_bundle_path }}"
@@ -315,9 +324,9 @@ def test_online_endpoint_sets_explicit_user_assigned_identity(monkeypatch):
 
     identity = endpoint_type.call_args.kwargs["identity"]
     assert identity.type == "user_assigned"
-    assert [
-        item.resource_id for item in identity.user_assigned_identities
-    ] == [args.endpoint_uami_resource_id]
+    assert [item.resource_id for item in identity.user_assigned_identities] == [
+        args.endpoint_uami_resource_id
+    ]
 
 
 @pytest.mark.parametrize(
@@ -738,7 +747,9 @@ def test_online_deployment_repeat_update_waits_before_traffic(monkeypatch):
     )
     client.online_endpoints.begin_create_or_update.return_value = endpoint_poller
     monkeypatch.setattr(create_online_deployment, "create_ml_client", lambda _: client)
-    monkeypatch.setattr(aml_client.time, "sleep", lambda _: events.append("state-check"))
+    monkeypatch.setattr(
+        aml_client.time, "sleep", lambda _: events.append("state-check")
+    )
 
     create_online_deployment.run(_online_deployment_args())
 
@@ -928,7 +939,9 @@ def test_batch_endpoint_repeat_update_waits_then_retries(monkeypatch):
         SimpleNamespace(provisioning_state="Succeeded"),
     ]
     monkeypatch.setattr(create_batch_endpoint, "create_ml_client", lambda _: client)
-    monkeypatch.setattr(aml_client.time, "sleep", lambda _: events.append("state-check"))
+    monkeypatch.setattr(
+        aml_client.time, "sleep", lambda _: events.append("state-check")
+    )
 
     result = create_batch_endpoint.run(_batch_endpoint_args())
 
@@ -964,7 +977,9 @@ def test_batch_deployment_uses_explicit_immutable_environment(monkeypatch):
         provisioning_state="Succeeded"
     )
     client.batch_deployments.begin_create_or_update.return_value = deployment_poller
-    client.batch_deployments.get.return_value = _live_batch_deployment()
+    client.batch_deployments.get.return_value = _live_batch_deployment(
+        TEST_WORKSPACE_ENVIRONMENT_ID
+    )
     endpoint = SimpleNamespace(
         defaults=SimpleNamespace(deployment_name=None),
         provisioning_state="Succeeded",
@@ -979,6 +994,10 @@ def test_batch_deployment_uses_explicit_immutable_environment(monkeypatch):
         name="sklearn-1.5",
         version="53",
         id=create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+        build=BuildContext(
+            path=TEST_REGISTRY_SOURCE_URI,
+            dockerfile_path="Dockerfile",
+        ),
     )
     registry_client = Mock()
     registry_client.environments.get.return_value = registry_environment
@@ -987,12 +1006,38 @@ def test_batch_deployment_uses_explicit_immutable_environment(monkeypatch):
         resource_group_name="registry-builtin-prod-eastus-01",
         registry_name="azureml",
     )
+    registry_client.environments._service_client = Mock()
     registry_client_type = Mock(return_value=registry_client)
+    client.environments.get.side_effect = ResourceNotFoundError("not found")
+
+    def download_context(*args):
+        destination = args[-1]
+        (destination / "Dockerfile").write_text("FROM scratch", encoding="utf-8")
+        return "a" * 64, {"Dockerfile"}
+
+    def create_environment(environment):
+        assert Path(environment.build.path).is_dir()
+        assert (Path(environment.build.path) / "Dockerfile").is_file()
+        return Environment(
+            name=environment.name,
+            version=environment.version,
+            id=TEST_WORKSPACE_ENVIRONMENT_ID,
+            build=environment.build,
+            tags=environment.tags,
+            properties=environment.properties,
+        )
+
+    client.environments.create_or_update.side_effect = create_environment
     monkeypatch.setattr(create_batch_deployment, "create_ml_client", lambda _: client)
     monkeypatch.setattr(
         create_batch_deployment,
         "create_registry_ml_client",
         registry_client_type,
+    )
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "_download_registry_build_context",
+        download_context,
     )
     monkeypatch.setattr(
         create_batch_deployment,
@@ -1010,18 +1055,23 @@ def test_batch_deployment_uses_explicit_immutable_environment(monkeypatch):
     create_batch_deployment.run(args)
 
     deployment_environment = batch_deployment_type.call_args.kwargs["environment"]
-    assert deployment_environment is registry_environment
-    assert not isinstance(deployment_environment, str)
-    assert deployment_environment.id == TEST_BATCH_ENVIRONMENT_ID
+    assert deployment_environment.id == TEST_WORKSPACE_ENVIRONMENT_ID
+    assert deployment_environment.name == "registry-azureml-sklearn-1-5"
+    assert deployment_environment.version == "53"
+    assert deployment_environment.properties == {
+        "source_registry": "azureml",
+        "source_environment": "sklearn-1.5",
+        "source_version": "53",
+        "source_reference": create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+        "source_manifest_sha256": "a" * 64,
+    }
     assert "image" not in batch_deployment_type.call_args.kwargs
     assert (
         batch_deployment_type.call_args.kwargs["code_configuration"]
         == "code-configuration"
     )
     code_configuration_type.assert_called_once_with(
-        code=str(
-            Path(__file__).parents[1] / "tests" / "fixtures" / "batch_scoring"
-        ),
+        code=str(Path(__file__).parents[1] / "tests" / "fixtures" / "batch_scoring"),
         scoring_script="score.py",
     )
     registry_client_type.assert_called_once_with(client, "azureml")
@@ -1029,6 +1079,606 @@ def test_batch_deployment_uses_explicit_immutable_environment(monkeypatch):
         name="sklearn-1.5",
         version="53",
     )
+    client.environments.get.assert_called_once_with(
+        name="registry-azureml-sklearn-1-5",
+        version="53",
+    )
+    client.environments.create_or_update.assert_called_once()
+
+
+class _RegistryResponse:
+    def __init__(self, body, headers=None):
+        self.body = body
+        self.headers = headers or {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return None
+
+    def read(self, size):
+        return self.body[:size]
+
+
+def _registry_listing(files, next_marker=""):
+    blobs = []
+    for name, body in files.items():
+        content_md5 = base64.b64encode(
+            hashlib.md5(body, usedforsecurity=False).digest()
+        ).decode("ascii")
+        blobs.append(
+            "<Blob>"
+            f"<Name>context/{name}</Name>"
+            "<Properties>"
+            f"<Content-Length>{len(body)}</Content-Length>"
+            f"<Content-MD5>{content_md5}</Content-MD5>"
+            "</Properties>"
+            "</Blob>"
+        )
+    return (
+        "<EnumerationResults><Blobs>"
+        + "".join(blobs)
+        + f"</Blobs><NextMarker>{next_marker}</NextMarker></EnumerationResults>"
+    ).encode()
+
+
+def _registry_client():
+    client = Mock()
+    client.environments._service_client = Mock()
+    client.environments._operation_scope = SimpleNamespace(
+        subscription_id="6c6683e9-e5fe-4038-8519-ce6ebec2ba15",
+        resource_group_name="registry-builtin-prod-eastus-01",
+        registry_name="azureml",
+    )
+    return client
+
+
+def _patch_registry_storage(monkeypatch):
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "package_version",
+        lambda _: create_batch_deployment.SUPPORTED_AZURE_AI_ML_VERSION,
+    )
+    helper = Mock(return_value=(TEST_REGISTRY_SAS_URL, "SAS"))
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "get_storage_details_for_registry_assets",
+        helper,
+    )
+    return helper
+
+
+def test_registry_build_context_downloads_authenticated_prefix_and_hashes(
+    monkeypatch,
+    tmp_path,
+):
+    files = {
+        "Dockerfile": b"FROM mcr.microsoft.com/azureml/base@sha256:" + b"a" * 64,
+        "conda_dependencies.yaml": b"dependencies:\n- python=3.11\n",
+    }
+    listing = _registry_listing(files)
+    requested_urls = []
+
+    def open_url(request):
+        requested_urls.append(request.full_url)
+        if "comp=list" in request.full_url:
+            return _RegistryResponse(
+                listing,
+                {"Content-Length": str(len(listing))},
+            )
+        name = request.full_url.split("/context/", 1)[1].split("?", 1)[0]
+        body = files[name]
+        content_md5 = base64.b64encode(
+            hashlib.md5(body, usedforsecurity=False).digest()
+        ).decode("ascii")
+        return _RegistryResponse(
+            body,
+            {
+                "Content-Length": str(len(body)),
+                "Content-MD5": content_md5,
+            },
+        )
+
+    registry_client = _registry_client()
+    helper = _patch_registry_storage(monkeypatch)
+    monkeypatch.setattr(create_batch_deployment, "_open_url", open_url)
+
+    manifest, downloaded = create_batch_deployment._download_registry_build_context(
+        registry_client,
+        "azureml",
+        "sklearn-1.5",
+        "53",
+        TEST_REGISTRY_SOURCE_URI,
+        tmp_path,
+    )
+
+    expected_entries = [
+        {
+            "path": name,
+            "sha256": hashlib.sha256(body).hexdigest(),
+            "size": len(body),
+        }
+        for name, body in sorted(files.items())
+    ]
+    expected_manifest = hashlib.sha256(
+        create_batch_deployment.json.dumps(
+            expected_entries,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    assert manifest == expected_manifest
+    assert downloaded == set(files)
+    assert (tmp_path / "Dockerfile").read_bytes() == files["Dockerfile"]
+    assert (tmp_path / "conda_dependencies.yaml").read_bytes() == files[
+        "conda_dependencies.yaml"
+    ]
+    assert "restype=container" in requested_urls[0]
+    assert "comp=list" in requested_urls[0]
+    assert "prefix=context%2F" in requested_urls[0]
+    assert all("sig=secret-sentinel" in url for url in requested_urls)
+    helper.assert_called_once_with(
+        service_client=registry_client.environments._service_client,
+        asset_type="environments",
+        asset_name="sklearn-1.5",
+        asset_version="53",
+        rg_name="registry-builtin-prod-eastus-01",
+        reg_name="azureml",
+        uri=TEST_REGISTRY_SOURCE_URI,
+    )
+
+
+@pytest.mark.parametrize(
+    ("listing", "message"),
+    [
+        (
+            _registry_listing({"../escape": b"unsafe"}),
+            "unsafe blob path",
+        ),
+        (
+            _registry_listing({"Dockerfile": b"FROM scratch"}, next_marker="more"),
+            "unsupported pagination",
+        ),
+        (
+            (
+                "<EnumerationResults><Blobs><Blob><Name>other/Dockerfile</Name>"
+                "<Properties><Content-Length>1</Content-Length>"
+                "<Content-MD5>ndTkYSaMgDT1yFZOFVxnpg==</Content-MD5>"
+                "</Properties></Blob></Blobs></EnumerationResults>"
+            ).encode(),
+            "outside the build prefix",
+        ),
+    ],
+)
+def test_registry_build_context_rejects_unsafe_or_incomplete_listing(
+    monkeypatch,
+    tmp_path,
+    listing,
+    message,
+):
+    _patch_registry_storage(monkeypatch)
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "_open_url",
+        lambda _: _RegistryResponse(listing),
+    )
+
+    with pytest.raises(RuntimeError, match=message):
+        create_batch_deployment._download_registry_build_context(
+            _registry_client(),
+            "azureml",
+            "sklearn-1.5",
+            "53",
+            TEST_REGISTRY_SOURCE_URI,
+            tmp_path,
+        )
+
+
+def test_registry_build_context_validates_md5_and_content_length(
+    monkeypatch,
+    tmp_path,
+):
+    body = b"FROM scratch"
+    listing = _registry_listing({"Dockerfile": body})
+    responses = iter(
+        [
+            _RegistryResponse(listing),
+            _RegistryResponse(
+                body + b"\n",
+                {
+                    "Content-Length": str(len(body) + 1),
+                    "Content-MD5": base64.b64encode(
+                        hashlib.md5(body, usedforsecurity=False).digest()
+                    ).decode("ascii"),
+                },
+            ),
+        ]
+    )
+    _patch_registry_storage(monkeypatch)
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "_open_url",
+        lambda _: next(responses),
+    )
+
+    with pytest.raises(RuntimeError, match="length did not match"):
+        create_batch_deployment._download_registry_build_context(
+            _registry_client(),
+            "azureml",
+            "sklearn-1.5",
+            "53",
+            TEST_REGISTRY_SOURCE_URI,
+            tmp_path,
+        )
+
+
+def test_registry_build_context_rejects_mismatched_response_md5(
+    monkeypatch,
+    tmp_path,
+):
+    body = b"FROM scratch"
+    listing = _registry_listing({"Dockerfile": body})
+    responses = iter(
+        [
+            _RegistryResponse(listing),
+            _RegistryResponse(
+                body,
+                {
+                    "Content-Length": str(len(body)),
+                    "Content-MD5": base64.b64encode(b"x" * 16).decode("ascii"),
+                },
+            ),
+        ]
+    )
+    _patch_registry_storage(monkeypatch)
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "_open_url",
+        lambda _: next(responses),
+    )
+
+    with pytest.raises(RuntimeError, match="MD5 did not match"):
+        create_batch_deployment._download_registry_build_context(
+            _registry_client(),
+            "azureml",
+            "sklearn-1.5",
+            "53",
+            TEST_REGISTRY_SOURCE_URI,
+            tmp_path,
+        )
+
+
+@pytest.mark.parametrize(
+    ("constant_name", "constant_value", "files", "message"),
+    [
+        (
+            "MAX_REGISTRY_BUILD_FILES",
+            1,
+            {"Dockerfile": b"a", "conda.yaml": b"b"},
+            "file-count bound",
+        ),
+        (
+            "MAX_REGISTRY_BUILD_FILE_BYTES",
+            1,
+            {"Dockerfile": b"ab"},
+            "file exceeds the size bound",
+        ),
+        (
+            "MAX_REGISTRY_BUILD_TOTAL_BYTES",
+            1,
+            {"Dockerfile": b"a", "conda.yaml": b"b"},
+            "total size bound",
+        ),
+    ],
+)
+def test_registry_build_context_enforces_count_and_size_bounds(
+    monkeypatch,
+    tmp_path,
+    constant_name,
+    constant_value,
+    files,
+    message,
+):
+    _patch_registry_storage(monkeypatch)
+    monkeypatch.setattr(
+        create_batch_deployment,
+        constant_name,
+        constant_value,
+    )
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "_open_url",
+        lambda _: _RegistryResponse(_registry_listing(files)),
+    )
+
+    with pytest.raises(RuntimeError, match=message):
+        create_batch_deployment._download_registry_build_context(
+            _registry_client(),
+            "azureml",
+            "sklearn-1.5",
+            "53",
+            TEST_REGISTRY_SOURCE_URI,
+            tmp_path,
+        )
+
+
+@pytest.mark.parametrize("failure_source", ["http", "sdk"])
+def test_registry_storage_errors_never_disclose_sas(
+    monkeypatch,
+    tmp_path,
+    failure_source,
+):
+    sentinel = "secret-sentinel"
+    _patch_registry_storage(monkeypatch)
+    if failure_source == "http":
+        monkeypatch.setattr(
+            create_batch_deployment,
+            "_open_url",
+            lambda request: (_ for _ in ()).throw(
+                HTTPError(request.full_url, 403, sentinel, {}, None)
+            ),
+        )
+    else:
+        monkeypatch.setattr(
+            create_batch_deployment,
+            "get_storage_details_for_registry_assets",
+            Mock(side_effect=RuntimeError(TEST_REGISTRY_SAS_URL)),
+        )
+
+    try:
+        create_batch_deployment._download_registry_build_context(
+            _registry_client(),
+            "azureml",
+            "sklearn-1.5",
+            "53",
+            TEST_REGISTRY_SOURCE_URI,
+            tmp_path,
+        )
+    except RuntimeError as exc:
+        rendered = "".join(
+            traceback.format_exception(type(exc), exc, exc.__traceback__)
+        )
+        assert sentinel not in rendered
+        assert "sig=" not in rendered
+    else:
+        pytest.fail("Expected registry storage failure")
+
+
+@pytest.mark.parametrize(
+    ("installed_version", "helper", "message"),
+    [
+        ("1.29.0", Mock(), "installed version is 1.29.0"),
+        ("1.30.0", None, "storage helper is unavailable"),
+    ],
+)
+def test_registry_storage_requires_validated_sdk_internal_surface(
+    monkeypatch,
+    installed_version,
+    helper,
+    message,
+):
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "package_version",
+        lambda _: installed_version,
+    )
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "get_storage_details_for_registry_assets",
+        helper,
+    )
+
+    with pytest.raises(RuntimeError, match=message):
+        create_batch_deployment._validate_sdk_registry_helper()
+
+
+def test_registry_build_environment_reuses_exact_provenance_after_download(
+    monkeypatch,
+):
+    client = Mock()
+    provenance = create_batch_deployment._registry_provenance(
+        "azureml",
+        "sklearn-1.5",
+        "53",
+        create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+        "manifest",
+    )
+    existing = Environment(
+        name="registry-azureml-sklearn-1-5",
+        version="53",
+        id=TEST_WORKSPACE_ENVIRONMENT_ID,
+        build=BuildContext(path="azureml://datastores/workspaceblobstore/paths/build"),
+        properties=provenance,
+    )
+    client.environments.get.return_value = existing
+    registry_environment = Environment(
+        name="sklearn-1.5",
+        version="53",
+        build=BuildContext(
+            path=TEST_REGISTRY_SOURCE_URI,
+            dockerfile_path="Dockerfile",
+        ),
+    )
+
+    def download(*args):
+        destination = args[-1]
+        (destination / "Dockerfile").write_text("FROM scratch", encoding="utf-8")
+        return "manifest", {"Dockerfile"}
+
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "_download_registry_build_context",
+        download,
+    )
+
+    result = create_batch_deployment._materialize_build_environment(
+        client,
+        _registry_client(),
+        registry_environment,
+        "azureml",
+        "sklearn-1.5",
+        "53",
+        create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+        "registry-azureml-sklearn-1-5",
+    )
+
+    assert result is existing
+    client.environments.create_or_update.assert_not_called()
+
+
+def test_registry_build_environment_fails_closed_on_workspace_collision(
+    monkeypatch,
+):
+    client = Mock()
+    client.environments.get.return_value = Environment(
+        name="registry-azureml-sklearn-1-5",
+        version="53",
+        id=TEST_WORKSPACE_ENVIRONMENT_ID,
+        image="example.azurecr.io/other@sha256:" + "b" * 64,
+        properties={"source_manifest_sha256": "different"},
+    )
+    registry_environment = Environment(
+        name="sklearn-1.5",
+        version="53",
+        build=BuildContext(
+            path=TEST_REGISTRY_SOURCE_URI,
+            dockerfile_path="Dockerfile",
+        ),
+    )
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "_download_registry_build_context",
+        lambda *args: ("manifest", {"Dockerfile"}),
+    )
+
+    with pytest.raises(RuntimeError, match="collides"):
+        create_batch_deployment._materialize_build_environment(
+            client,
+            _registry_client(),
+            registry_environment,
+            "azureml",
+            "sklearn-1.5",
+            "53",
+            create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+            "registry-azureml-sklearn-1-5",
+        )
+
+    client.environments.create_or_update.assert_not_called()
+
+
+def test_registry_build_environment_rejects_image_with_matching_properties(
+    monkeypatch,
+):
+    client = Mock()
+    provenance = create_batch_deployment._registry_provenance(
+        "azureml",
+        "sklearn-1.5",
+        "53",
+        create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+        "a" * 64,
+    )
+    client.environments.get.return_value = Environment(
+        name="registry-azureml-sklearn-1-5",
+        version="53",
+        id=TEST_WORKSPACE_ENVIRONMENT_ID,
+        image="example.azurecr.io/other@sha256:" + "b" * 64,
+        properties=provenance,
+    )
+    registry_environment = Environment(
+        name="sklearn-1.5",
+        version="53",
+        build=BuildContext(
+            path=TEST_REGISTRY_SOURCE_URI,
+            dockerfile_path="Dockerfile",
+        ),
+    )
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "_download_registry_build_context",
+        lambda *args: ("a" * 64, {"Dockerfile"}),
+    )
+
+    with pytest.raises(RuntimeError, match="source conflicts"):
+        create_batch_deployment._materialize_build_environment(
+            client,
+            _registry_client(),
+            registry_environment,
+            "azureml",
+            "sklearn-1.5",
+            "53",
+            create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+            "registry-azureml-sklearn-1-5",
+        )
+
+
+def test_registry_image_environment_materializes_exact_digest():
+    client = Mock()
+    client.environments.get.side_effect = ResourceNotFoundError("not found")
+    image = "mcr.microsoft.com/azureml/sklearn@sha256:" + "a" * 64
+
+    def create(environment):
+        return Environment(
+            name=environment.name,
+            version=environment.version,
+            id=TEST_WORKSPACE_ENVIRONMENT_ID,
+            image=environment.image,
+            properties=environment.properties,
+        )
+
+    client.environments.create_or_update.side_effect = create
+    result = create_batch_deployment._materialize_image_environment(
+        client,
+        Environment(name="sklearn-1.5", version="53", image=image),
+        "azureml",
+        "sklearn-1.5",
+        "53",
+        create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+        "registry-azureml-sklearn-1-5",
+    )
+
+    assert result.image == image
+    assert (
+        result.properties["source_manifest_sha256"]
+        == hashlib.sha256(image.encode()).hexdigest()
+    )
+
+
+@pytest.mark.parametrize(
+    "environment",
+    [
+        Environment(name="env", version="1", image="example.azurecr.io/env:latest"),
+        Environment(name="env", version="1", conda_file={"dependencies": []}),
+        Environment(
+            name="env",
+            version="1",
+            image="example.azurecr.io/env@sha256:" + "a" * 64,
+            build=BuildContext(path=TEST_REGISTRY_SOURCE_URI),
+        ),
+    ],
+)
+def test_registry_environment_rejects_mutable_conflicting_or_unsupported_source(
+    monkeypatch,
+    environment,
+):
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "_get_registry_environment",
+        lambda *_: (
+            _registry_client(),
+            environment,
+            "azureml",
+            "sklearn-1.5",
+            "53",
+            TEST_BATCH_ENVIRONMENT_ID,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="immutable|conflicting|unsupported"):
+        create_batch_deployment.resolve_batch_environment(
+            Mock(),
+            create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+        )
 
 
 @pytest.mark.parametrize(
@@ -1038,9 +1688,6 @@ def test_batch_deployment_uses_explicit_immutable_environment(monkeypatch):
         "/subscriptions/sub/resourceGroups/rg/providers/"
         "Microsoft.MachineLearningServices/workspaces/ws/environments/"
         "workspace-environment/versions/7",
-        "/subscriptions/sub/resourceGroups/rg/providers/"
-        "Microsoft.MachineLearningServices/registries/private/environments/"
-        "registry-environment/versions/9",
     ],
 )
 def test_batch_environment_resolution_preserves_supported_non_registry_uri_forms(
@@ -1058,6 +1705,61 @@ def test_batch_environment_resolution_preserves_supported_non_registry_uri_forms
         reference
     )
     registry_client_type.assert_not_called()
+
+
+def test_full_registry_arm_id_is_classified_for_workspace_materialization(
+    monkeypatch,
+):
+    reference = (
+        "/subscriptions/6c6683e9-e5fe-4038-8519-ce6ebec2ba15/"
+        "resourceGroups/registry-builtin-prod-eastus-01/providers/"
+        "Microsoft.MachineLearningServices/registries/azureml/environments/"
+        "sklearn-1.5/versions/53"
+    )
+    workspace_environment = Environment(
+        name="registry-azureml-sklearn-1-5",
+        version="53",
+        id=TEST_WORKSPACE_ENVIRONMENT_ID,
+        image="mcr.microsoft.com/azureml/sklearn@sha256:" + "a" * 64,
+        properties={
+            "source_registry": "azureml",
+            "source_environment": "sklearn-1.5",
+            "source_version": "53",
+            "source_reference": reference,
+            "source_manifest_sha256": "manifest",
+        },
+    )
+    get_registry_environment = Mock(
+        return_value=(
+            _registry_client(),
+            Environment(
+                name="sklearn-1.5",
+                version="53",
+                image="mcr.microsoft.com/azureml/sklearn@sha256:" + "a" * 64,
+            ),
+            "azureml",
+            "sklearn-1.5",
+            "53",
+            reference,
+        )
+    )
+    materialize = Mock(return_value=workspace_environment)
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "_get_registry_environment",
+        get_registry_environment,
+    )
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "_materialize_image_environment",
+        materialize,
+    )
+
+    result = create_batch_deployment.resolve_batch_environment(Mock(), reference)
+
+    assert result is workspace_environment
+    get_registry_environment.assert_called_once()
+    materialize.assert_called_once()
 
 
 def test_registry_environment_resolution_rejects_mismatched_service_id(monkeypatch):
@@ -1206,7 +1908,7 @@ def test_registry_environment_entity_survives_sdk_dependency_orchestration():
     assert not serialized_environment_id.startswith("azureml://")
 
 
-def test_registry_environment_resolution_fails_if_entity_id_cannot_be_replaced(
+def test_registry_environment_resolution_rejects_unsupported_source(
     monkeypatch,
 ):
     registry_client = Mock()
@@ -1224,7 +1926,7 @@ def test_registry_environment_resolution_fails_if_entity_id_cannot_be_replaced(
         Mock(return_value=registry_client),
     )
 
-    with pytest.raises(RuntimeError, match="did not retain"):
+    with pytest.raises(RuntimeError, match="source is unsupported"):
         create_batch_deployment.resolve_batch_environment(
             Mock(),
             create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
@@ -1262,26 +1964,23 @@ def test_batch_deployment_rejects_mutable_environment_reference(
 
 def test_batch_workflow_passes_explicit_scoring_configuration():
     workflow = (
-        Path(__file__).parents[1]
-        / ".github"
-        / "workflows"
-        / "python-sdk-v2-batch.yml"
+        Path(__file__).parents[1] / ".github" / "workflows" / "python-sdk-v2-batch.yml"
     )
     workflow_text = workflow.read_text(encoding="utf-8")
     parsed = yaml.safe_load(workflow_text)
     inputs = parsed[True]["workflow_call"]["inputs"]
 
     assert (
-        "default: "
-        "azureml://registries/azureml/environments/sklearn-1.5/versions/53"
+        "default: " "azureml://registries/azureml/environments/sklearn-1.5/versions/53"
     ) in workflow_text
     assert inputs["scoring_code_directory"]["required"] is True
     assert inputs["scoring_script"]["required"] is True
     assert (
-        "DEPLOYMENT_ENVIRONMENT: ${{ inputs.deployment_environment }}"
-        in workflow_text
+        "DEPLOYMENT_ENVIRONMENT: ${{ inputs.deployment_environment }}" in workflow_text
     )
-    assert "SCORING_CODE_DIRECTORY: ${{ inputs.scoring_code_directory }}" in workflow_text
+    assert (
+        "SCORING_CODE_DIRECTORY: ${{ inputs.scoring_code_directory }}" in workflow_text
+    )
     assert "SCORING_SCRIPT: ${{ inputs.scoring_script }}" in workflow_text
     assert '--environment "$DEPLOYMENT_ENVIRONMENT"' in workflow_text
     assert '--repository_root "$GITHUB_WORKSPACE"' in workflow_text
@@ -1302,9 +2001,7 @@ def test_batch_scoring_example_defines_supported_mlflow_contract():
     )
     tree = ast.parse(scoring_source.read_text(encoding="utf-8"))
     functions = {
-        node.name: node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef)
+        node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
     }
 
     assert scoring_source.is_file()
@@ -1433,6 +2130,7 @@ def test_batch_deployment_rejects_null_or_mismatched_live_configuration(
         create_batch_deployment.verify_live_deployment(
             live_deployment,
             create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+            "azureml:workspace-environment:7",
             "score.py",
         )
 
@@ -1470,7 +2168,9 @@ def test_batch_deployment_repeat_update_waits_then_verifies_before_defaulting(
         events.append("endpoint-begin") or endpoint_poller
     )
     monkeypatch.setattr(create_batch_deployment, "create_ml_client", lambda _: client)
-    monkeypatch.setattr(aml_client.time, "sleep", lambda _: events.append("state-check"))
+    monkeypatch.setattr(
+        aml_client.time, "sleep", lambda _: events.append("state-check")
+    )
 
     create_batch_deployment.run(_batch_deployment_args())
 
@@ -1543,7 +2243,7 @@ def _batch_deployment_args():
         model_name="model",
         model_version="1",
         compute="batch-compute",
-        environment=TEST_BATCH_ENVIRONMENT_ID,
+        environment=TEST_WORKSPACE_ENVIRONMENT_ID,
         repository_root=str(Path(__file__).parents[1]),
         scoring_code_directory="tests/fixtures/batch_scoring",
         scoring_script="score.py",
@@ -1554,10 +2254,10 @@ def _batch_deployment_args():
     )
 
 
-def _live_batch_deployment():
+def _live_batch_deployment(environment=TEST_WORKSPACE_ENVIRONMENT_ID):
     return SimpleNamespace(
         provisioning_state="Succeeded",
-        environment=TEST_BATCH_ENVIRONMENT_ID,
+        environment=environment,
         code_configuration=SimpleNamespace(
             code="azureml:batch-scoring-code:1",
             scoring_script="score.py",
@@ -1592,7 +2292,7 @@ def test_failed_job_downloads_child_logs_and_surfaces_root_cause(
         log_path.write_text(
             "starting training\n"
             "Traceback (most recent call last):\n"
-            "  File \"train.py\", line 42, in <module>\n"
+            '  File "train.py", line 42, in <module>\n'
             "ValueError: decisive root cause\n",
             encoding="utf-8",
         )
@@ -1632,8 +2332,7 @@ def test_failed_job_reports_download_failure_and_falls_back_to_parent(
 
     output = capsys.readouterr().out
     assert (
-        "Unable to download diagnostics for job parent: "
-        "private storage unavailable"
+        "Unable to download diagnostics for job parent: " "private storage unavailable"
     ) in output
     client.jobs.download.assert_called_once_with(
         name="parent",
@@ -1687,10 +2386,7 @@ def test_failed_leaf_retries_full_download_when_standard_download_is_pointer(
     assert "retrying full job download" in output
     assert "RuntimeError: image build root cause" in output
     download_path = str(
-        tmp_path
-        / "diagnostics"
-        / "imgbldrun_1175c66"
-        / "imgbldrun_1175c66"
+        tmp_path / "diagnostics" / "imgbldrun_1175c66" / "imgbldrun_1175c66"
     )
     assert client.jobs.download.call_args_list == [
         call(
@@ -1855,8 +2551,7 @@ def test_train_workflow_uploads_failed_diagnostics_with_pinned_action():
 
     assert "if: ${{ failure() }}" in workflow
     assert (
-        "uses: actions/upload-artifact@"
-        "ea165f8d65b6e75b540449e92b4886f43607fa02"
+        "uses: actions/upload-artifact@" "ea165f8d65b6e75b540449e92b4886f43607fa02"
     ) in workflow
     assert "path: aml-diagnostics" in workflow
     assert "if-no-files-found: warn" in workflow
