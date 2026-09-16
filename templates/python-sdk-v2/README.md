@@ -54,11 +54,20 @@ managed online endpoint. Its required serving inputs are:
   administrator
 - `runner`: the private ARC runner label with network access to the private
   workspace and inference endpoint
+- `tls_ca_key_vault_secret_id`: the full Key Vault secret resource ID for a
+  secret whose value is the PEM CA certificate bundle that signed the private
+  inference ingress certificate
 - `endpoint_name`, `deployment_name`, `model_name`, `model_version`, and
   `request_file`
 
-`instance_count` and `traffic_allocation` remain optional. The workflow outputs
-the endpoint and deployment names.
+`instance_count`, `traffic_allocation`, and `endpoint_uami_resource_id` remain
+optional. When supplied, `endpoint_uami_resource_id` must be the full resource
+ID of a user-assigned managed identity; system-assigned and AKS node identity
+fallbacks are rejected. The pinned SDK supports an explicit identity on
+`KubernetesOnlineEndpoint`. When this optional input is omitted, the workflow
+does not force an endpoint identity: the required UAMI on the attached Azure ML
+Kubernetes compute remains the serving identity used for image pulls and Azure
+resource access. The workflow outputs the endpoint and deployment names.
 
 The online compute is an infrastructure prerequisite and is validated before
 endpoint creation. It must be in `Succeeded` state, use a dedicated non-default
@@ -69,16 +78,25 @@ never reads AKS credentials or uses the AKS node identity.
 For direct AKS with local accounts disabled, infrastructure must create the
 per-workspace AKS Trusted Access role binding for
 `Microsoft.MachineLearningServices/workspaces/mlworkload` before attaching the
-compute. Do not enable AKS local accounts. Azure Arc-enabled Kubernetes remains
-a supported fallback when Trusted Access isn't available.
+compute. This direct `managedClusters` attachment is supported in Azure public
+cloud and does not require Azure Arc. Do not enable AKS local accounts. Azure
+Arc-enabled `connectedClusters` remains a supported alternative.
 
 Infrastructure must install the Azure ML extension with inference enabled and
 HTTPS preserved. At minimum, configure `enableInference=true`,
 `allowInsecureConnections=false`, `sslSecret`, and `sslCname`, plus the
-inference router service type. Infrastructure also owns the dedicated
-namespace, user node pool, workload identity/UAMI, TLS secret, and Kubernetes
-instance types. None of those credentials or Kubernetes administration details
-are workflow inputs.
+inference router with an internal ingress service type. Infrastructure also
+owns the dedicated namespace, user node pool, workload identity/UAMI, TLS
+secret, and Kubernetes instance types. None of those credentials or Kubernetes
+administration details are workflow inputs.
+
+The OIDC identity must have permission to read the specified Key Vault secret.
+After `azure/login`, the workflow retrieves the secret value without printing
+it, writes it to a mode `0600` temporary file, validates it as a PEM certificate
+bundle, and exposes it as `REQUESTS_CA_BUNDLE` and `SSL_CERT_FILE` only to the
+endpoint invocation step. TLS verification remains enabled. A missing,
+unreadable, empty, or invalid CA bundle fails the job; an `always()` cleanup
+step deletes the temporary file.
 
 Outside CI, the scripts use `DefaultAzureCredential` for local development with
 interactive browser and managed identity credentials excluded. Sign in with
@@ -123,6 +141,8 @@ jobs:
       instance_count: 1
       request_file: samples/online-request.json
       runner: ${{ vars.PRIVATE_ARC_RUNNER }}
+      tls_ca_key_vault_secret_id: ${{ vars.ONLINE_TLS_CA_SECRET_ID }}
+      endpoint_uami_resource_id: ${{ vars.ONLINE_ENDPOINT_UAMI_RESOURCE_ID }}
     secrets:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -130,11 +150,13 @@ jobs:
 ```
 
 The coordinated infrastructure configuration keys are `online_compute`,
-`online_environment_name`, `online_environment_version`, and
-`online_instance_type`. Map them to the uppercase repository/environment
-variables shown above. Remove any managed-online VM SKU such as
-`Standard_DS2_v2`; Kubernetes `instance_type` is a cluster-defined resource
-profile. Keep the private ARC runner and existing OIDC secrets unchanged.
+`online_environment_name`, `online_environment_version`,
+`online_instance_type`, and `online_tls_ca_secret_id`, with
+`online_endpoint_uami_resource_id` optional. Map them to the uppercase
+repository/environment variables shown above. Remove any managed-online VM SKU
+such as `Standard_DS2_v2`; Kubernetes `instance_type` is a cluster-defined
+resource profile. Keep the private ARC runner and existing OIDC secrets
+unchanged.
 
 Promote to `test` or `prod` by calling the same reusable workflow with a
 different GitHub Environment and environment-scoped OIDC secrets and variables.
