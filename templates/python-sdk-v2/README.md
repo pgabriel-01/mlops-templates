@@ -38,7 +38,11 @@ endpoint and model inputs plus `compute`, `request_batch_file`, and optionally
 only with another versioned Azure ML environment reference. Supplying an
 explicit prebuilt environment prevents Azure ML from generating an anonymous
 Conda environment and workspace image build, which is incompatible with
-workspaces that enforce `allowSharedKeyAccess=false`.
+workspaces that enforce `allowSharedKeyAccess=false`. Registry shorthand is
+resolved with a registry-scoped SDK client using the same OIDC-backed
+credential; the exact numeric version's full ARM resource ID is passed to the
+batch deployment so the service never receives registry shorthand in
+`ModelConfiguration.EnvironmentId`.
 
 The online workflow targets an Azure ML **Kubernetes online endpoint**, not a
 managed online endpoint. It supports two explicit deployment modes:
