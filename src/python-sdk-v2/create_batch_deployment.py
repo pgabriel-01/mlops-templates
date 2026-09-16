@@ -14,15 +14,42 @@ from aml_client import (
     wait_for_resource_create_or_update,
 )
 
+DEFAULT_BATCH_ENVIRONMENT = (
+    "azureml://registries/azureml/environments/sklearn-1.5/versions/53"
+)
 IMMUTABLE_ENVIRONMENT_PATTERNS = (
     re.compile(
-        r"azureml://registries/[^/]+/environments/[^/]+/versions/[^/]+"
+        r"azureml://registries/[^/\s]+/environments/[^/\s]+/versions/\d+"
     ),
-    re.compile(r"azureml:[^:/@]+:[^:/@]+"),
+    re.compile(r"azureml:[^:\s]+:\d+"),
     re.compile(
-        r"azureml:/subscriptions/.+/environments/[^/]+/versions/[^/]+"
+        r"/subscriptions/[^/\s]+/resourceGroups/[^/\s]+/providers/"
+        r"Microsoft\.MachineLearningServices/(?:workspaces|registries)/[^/\s]+/"
+        r"environments/[^/\s]+/versions/\d+",
+        re.IGNORECASE,
     ),
 )
+
+
+def validate_immutable_environment_reference(reference: str) -> str:
+    normalized_reference = reference.strip()
+    if not normalized_reference:
+        raise argparse.ArgumentTypeError(
+            "An immutable Azure ML environment reference is required."
+        )
+    if not any(
+        pattern.fullmatch(normalized_reference)
+        for pattern in IMMUTABLE_ENVIRONMENT_PATTERNS
+    ):
+        raise argparse.ArgumentTypeError(
+            "Azure ML environment must be an immutable numeric version reference: "
+            "'azureml://registries/<registry>/environments/<name>/versions/<version>', "
+            "'azureml:<name>:<version>', or a full Azure resource ID ending in "
+            "'/environments/<name>/versions/<version>'. Mutable labels, 'latest', "
+            "unversioned references, images, and inline Conda environments are not "
+            "allowed."
+        )
+    return normalized_reference
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,7 +63,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model_name", required=True)
     parser.add_argument("--model_version", required=True)
     parser.add_argument("--compute", required=True)
-    parser.add_argument("--environment", required=True)
+    parser.add_argument(
+        "--environment",
+        type=validate_immutable_environment_reference,
+        default=DEFAULT_BATCH_ENVIRONMENT,
+        help="Immutable versioned Azure ML environment reference.",
+    )
     parser.add_argument("--instance_count", type=int, default=2)
     parser.add_argument("--max_concurrency_per_instance", type=int, default=4)
     parser.add_argument("--mini_batch_size", type=int, default=32)
@@ -45,6 +77,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def run(args: argparse.Namespace):
+    environment = validate_immutable_environment_reference(args.environment)
     ml_client = create_ml_client(args)
     model = get_registered_model(
         ml_client,
@@ -82,18 +115,6 @@ def run(args: argparse.Namespace):
         lambda: ml_client.batch_endpoints.get(args.endpoint_name),
         f"batch endpoint {args.endpoint_name}",
     )
-
-
-def validate_immutable_environment_reference(reference: str) -> str:
-    value = reference.strip()
-    if any(pattern.fullmatch(value) for pattern in IMMUTABLE_ENVIRONMENT_PATTERNS):
-        return value
-    raise ValueError(
-        "Batch deployment environment must be an immutable version reference, "
-        "for example "
-        "azureml://registries/azureml/environments/sklearn-1.5/versions/53"
-    )
-
 
 def main() -> None:
     run(parse_args())

@@ -18,11 +18,6 @@ create_online_deployment = importlib.import_module("create_online_deployment")
 test_batch_endpoint = importlib.import_module("test_batch_endpoint")
 train_and_register_model = importlib.import_module("train_and_register_model")
 
-CURATED_BATCH_ENVIRONMENT = (
-    "azureml://registries/azureml/environments/sklearn-1.5/versions/53"
-)
-
-
 @pytest.mark.parametrize("ci_environment", ["GITHUB_ACTIONS", "CI"])
 def test_ci_uses_validated_azure_cli_credential(monkeypatch, ci_environment):
     credential = Mock()
@@ -345,30 +340,51 @@ def test_batch_deployment_uses_explicit_immutable_environment(monkeypatch):
     endpoint_poller = Mock()
     endpoint_poller.result.return_value = endpoint
     client.batch_endpoints.begin_create_or_update.return_value = endpoint_poller
+    batch_deployment_type = Mock(return_value=SimpleNamespace())
     monkeypatch.setattr(create_batch_deployment, "create_ml_client", lambda _: client)
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "BatchDeployment",
+        batch_deployment_type,
+    )
 
     create_batch_deployment.run(_batch_deployment_args())
 
-    deployment = (
-        client.batch_deployments.begin_create_or_update.call_args.args[0]
+    assert (
+        batch_deployment_type.call_args.kwargs["environment"]
+        == create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT
     )
-    assert deployment.environment == CURATED_BATCH_ENVIRONMENT
-    assert deployment._to_dict()["environment"] == CURATED_BATCH_ENVIRONMENT
-    assert deployment.code_configuration is None
+    assert "image" not in batch_deployment_type.call_args.kwargs
+    assert "code_configuration" not in batch_deployment_type.call_args.kwargs
 
 
 @pytest.mark.parametrize(
     "reference",
     [
+        "",
+        "latest",
+        "azureml://registries/azureml/environments/sklearn-1.5",
         "azureml://registries/azureml/environments/sklearn-1.5/labels/latest",
-        "azureml:batch-inference@latest",
-        "batch-inference-ncd-env",
-        " ",
+        "azureml://registries/azureml/environments/sklearn-1.5/versions/latest",
+        "azureml:sklearn-1.5@latest",
+        "azureml:sklearn-1.5:latest",
+        "mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04:latest",
+        "conda.yml",
     ],
 )
-def test_batch_deployment_rejects_mutable_environment_reference(reference):
-    with pytest.raises(ValueError, match="immutable version reference"):
-        create_batch_deployment.validate_immutable_environment_reference(reference)
+def test_batch_deployment_rejects_mutable_environment_reference(
+    monkeypatch,
+    reference,
+):
+    create_client = Mock()
+    monkeypatch.setattr(create_batch_deployment, "create_ml_client", create_client)
+    args = _batch_deployment_args()
+    args.environment = reference
+
+    with pytest.raises(argparse.ArgumentTypeError, match="immutable|numeric version"):
+        create_batch_deployment.run(args)
+
+    create_client.assert_not_called()
 
 
 def test_batch_workflow_uses_pinned_curated_environment():
@@ -387,6 +403,36 @@ def test_batch_workflow_uses_pinned_curated_environment():
     assert '--environment "$DEPLOYMENT_ENVIRONMENT"' in workflow
 
 
+def test_batch_cli_defaults_to_immutable_prebuilt_environment(monkeypatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "create_batch_deployment.py",
+            "--subscription_id",
+            "sub",
+            "--resource_group",
+            "rg",
+            "--workspace_name",
+            "ws",
+            "--deployment_name",
+            "batch-deployment",
+            "--endpoint_name",
+            "batch-endpoint",
+            "--model_name",
+            "model",
+            "--model_version",
+            "1",
+            "--compute",
+            "batch-compute",
+        ],
+    )
+
+    args = create_batch_deployment.parse_args()
+
+    assert args.environment == create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT
+
+
 def _batch_endpoint_args():
     return argparse.Namespace(
         endpoint_name="batch-endpoint",
@@ -403,7 +449,7 @@ def _batch_deployment_args():
         model_name="model",
         model_version="1",
         compute="batch-compute",
-        environment=CURATED_BATCH_ENVIRONMENT,
+        environment=create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
         instance_count=1,
         max_concurrency_per_instance=1,
         mini_batch_size=10,
