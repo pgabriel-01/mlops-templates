@@ -144,6 +144,7 @@ def test_online_workflow_requires_private_kubernetes_contract():
         "compute",
         "environment_name",
         "environment_version",
+        "mlflow_no_code",
         "instance_type",
         "instance_count",
         "tls_ca_key_vault_secret_id",
@@ -151,16 +152,24 @@ def test_online_workflow_requires_private_kubernetes_contract():
         assert required_input in inputs
     assert inputs["runner"]["required"] is True
     assert inputs["compute"]["required"] is True
-    assert inputs["environment_name"]["required"] is True
-    assert inputs["environment_version"]["required"] is True
+    assert inputs["environment_name"]["required"] is False
+    assert inputs["environment_name"]["default"] == ""
+    assert inputs["environment_version"]["required"] is False
+    assert inputs["environment_version"]["default"] == ""
+    assert inputs["mlflow_no_code"]["required"] is False
+    assert inputs["mlflow_no_code"]["default"] is False
     assert inputs["instance_type"]["required"] is True
     assert inputs["tls_ca_key_vault_secret_id"]["required"] is True
     assert inputs["endpoint_uami_resource_id"]["required"] is False
     assert "ubuntu-24.04" not in workflow
     assert "Standard_DS2_v2" not in workflow
     assert "--compute \"$COMPUTE\"" in workflow
-    assert "--environment_name \"$ENVIRONMENT_NAME\"" in workflow
-    assert "--environment_version \"$ENVIRONMENT_VERSION\"" in workflow
+    assert 'deployment_mode_args+=(--mlflow_no_code)' in workflow
+    assert 'deployment_mode_args+=(--environment_name "$ENVIRONMENT_NAME")' in workflow
+    assert (
+        'deployment_mode_args+=(--environment_version "$ENVIRONMENT_VERSION")'
+        in workflow
+    )
     assert "az keyvault secret show" in workflow
     assert "--id \"$TLS_CA_KEY_VAULT_SECRET_ID\"" in workflow
     assert (
@@ -549,6 +558,121 @@ def test_online_deployment_uses_kubernetes_and_exact_environment(monkeypatch):
         "kubernetes-deployment"
     )
     client.online_endpoints.begin_create_or_update.assert_called_once_with(endpoint)
+
+
+def test_online_mlflow_no_code_omits_environment_and_code_configuration(monkeypatch):
+    client = Mock()
+    client.models.get.return_value = SimpleNamespace(
+        id="azureml:model:1",
+        type="mlflow_model",
+    )
+    deployment_poller = Mock()
+    deployment_poller.result.return_value = SimpleNamespace(
+        provisioning_state="Succeeded"
+    )
+    client.online_deployments.begin_create_or_update.return_value = deployment_poller
+    client.online_deployments.get.return_value = SimpleNamespace(
+        provisioning_state="Succeeded"
+    )
+    endpoint = SimpleNamespace(traffic={}, provisioning_state="Succeeded")
+    client.online_endpoints.get.return_value = endpoint
+    endpoint_poller = Mock()
+    endpoint_poller.result.return_value = endpoint
+    client.online_endpoints.begin_create_or_update.return_value = endpoint_poller
+    deployment_type = Mock(return_value="kubernetes-deployment")
+    environment_lookup = Mock()
+    monkeypatch.setattr(create_online_deployment, "create_ml_client", lambda _: client)
+    monkeypatch.setattr(
+        create_online_deployment,
+        "KubernetesOnlineDeployment",
+        deployment_type,
+    )
+    monkeypatch.setattr(
+        create_online_deployment,
+        "get_prebuilt_environment",
+        environment_lookup,
+    )
+    args = _online_deployment_args()
+    args.mlflow_no_code = True
+    args.environment_name = None
+    args.environment_version = None
+
+    create_online_deployment.run(args)
+
+    deployment_kwargs = deployment_type.call_args.kwargs
+    assert "environment" not in deployment_kwargs
+    assert "code_configuration" not in deployment_kwargs
+    environment_lookup.assert_not_called()
+    client.models.get.assert_called_once_with(name="model", version="1")
+
+
+def test_online_mlflow_no_code_rejects_non_mlflow_model(monkeypatch):
+    client = Mock()
+    client.models.get.return_value = SimpleNamespace(
+        id="azureml:model:1",
+        type="custom_model",
+    )
+    monkeypatch.setattr(create_online_deployment, "create_ml_client", lambda _: client)
+    args = _online_deployment_args()
+    args.mlflow_no_code = True
+    args.environment_name = None
+    args.environment_version = None
+
+    with pytest.raises(RuntimeError, match="require an MLflow model"):
+        create_online_deployment.run(args)
+
+    client.online_deployments.begin_create_or_update.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("environment_name", "environment_version"),
+    [
+        ("inference", None),
+        (None, "7"),
+        ("inference", "7"),
+    ],
+)
+def test_online_mlflow_no_code_rejects_environment_conflicts_before_azure(
+    monkeypatch,
+    environment_name,
+    environment_version,
+):
+    create_client = Mock()
+    monkeypatch.setattr(create_online_deployment, "create_ml_client", create_client)
+    args = _online_deployment_args()
+    args.mlflow_no_code = True
+    args.environment_name = environment_name
+    args.environment_version = environment_version
+
+    with pytest.raises(argparse.ArgumentTypeError, match="cannot be combined"):
+        create_online_deployment.run(args)
+
+    create_client.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("environment_name", "environment_version"),
+    [
+        (None, None),
+        ("inference", None),
+        (None, "7"),
+    ],
+)
+def test_online_image_mode_requires_complete_environment_before_azure(
+    monkeypatch,
+    environment_name,
+    environment_version,
+):
+    create_client = Mock()
+    monkeypatch.setattr(create_online_deployment, "create_ml_client", create_client)
+    args = _online_deployment_args()
+    args.environment_name = environment_name
+    args.environment_version = environment_version
+
+    with pytest.raises(argparse.ArgumentTypeError, match="are required"):
+        create_online_deployment.run(args)
+
+    create_client.assert_not_called()
 
 
 def test_online_deployment_repeat_update_waits_before_traffic(monkeypatch):
@@ -1151,6 +1275,7 @@ def _online_deployment_args():
         model_version="1",
         environment_name="inference",
         environment_version="7",
+        mlflow_no_code=False,
         instance_type="cpu-small",
         instance_count=2,
         traffic_allocation=100,

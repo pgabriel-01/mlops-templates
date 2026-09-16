@@ -34,11 +34,20 @@ on:
         required: true
         type: string
       environment_name:
-        required: true
+        description: Required immutable image-only environment name unless mlflow_no_code is true
+        required: false
+        default: ""
         type: string
       environment_version:
-        required: true
+        description: Required immutable image-only environment version unless mlflow_no_code is true
+        required: false
+        default: ""
         type: string
+      mlflow_no_code:
+        description: Let Azure ML supply the curated inference environment for an MLflow model
+        required: false
+        default: false
+        type: boolean
       instance_type:
         required: true
         type: string
@@ -192,10 +201,21 @@ jobs:
           MODEL_VERSION: ${{ inputs.model_version }}
           ENVIRONMENT_NAME: ${{ inputs.environment_name }}
           ENVIRONMENT_VERSION: ${{ inputs.environment_version }}
+          MLFLOW_NO_CODE: ${{ inputs.mlflow_no_code }}
           INSTANCE_TYPE: ${{ inputs.instance_type }}
           INSTANCE_COUNT: ${{ inputs.instance_count }}
           TRAFFIC_ALLOCATION: ${{ inputs.traffic_allocation }}
         run: |
+          deployment_mode_args=()
+          if [[ "$MLFLOW_NO_CODE" == "true" ]]; then
+            deployment_mode_args+=(--mlflow_no_code)
+          fi
+          if [[ -n "$ENVIRONMENT_NAME" ]]; then
+            deployment_mode_args+=(--environment_name "$ENVIRONMENT_NAME")
+          fi
+          if [[ -n "$ENVIRONMENT_VERSION" ]]; then
+            deployment_mode_args+=(--environment_version "$ENVIRONMENT_VERSION")
+          fi
           python .mlops-python-sdk/src/python-sdk-v2/create_online_deployment.py \
             --subscription_id "$AZURE_SUBSCRIPTION_ID" \
             --resource_group "$RESOURCE_GROUP" \
@@ -204,11 +224,10 @@ jobs:
             --deployment_name "$DEPLOYMENT_NAME" \
             --model_name "$MODEL_NAME" \
             --model_version "$MODEL_VERSION" \
-            --environment_name "$ENVIRONMENT_NAME" \
-            --environment_version "$ENVIRONMENT_VERSION" \
             --instance_type "$INSTANCE_TYPE" \
             --instance_count "$INSTANCE_COUNT" \
-            --traffic_allocation "$TRAFFIC_ALLOCATION"
+            --traffic_allocation "$TRAFFIC_ALLOCATION" \
+            "${deployment_mode_args[@]}"
       - name: Invoke endpoint
         env:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
