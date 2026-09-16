@@ -40,8 +40,11 @@ explicit prebuilt environment prevents Azure ML from generating an anonymous
 Conda environment and workspace image build, which is incompatible with
 workspaces that enforce `allowSharedKeyAccess=false`. Registry shorthand is
 resolved with a registry-scoped SDK client using the same OIDC-backed
-credential; the exact numeric version's full ARM resource ID is passed to the
-batch deployment so the service never receives registry shorthand in
+credential. Because the SDK returns registry shorthand from `Environment.id`,
+the exact numeric version is verified by lookup and its full ARM resource ID is
+constructed from the registry client's authoritative operation scope. Missing
+or unsafe scope data fails closed, and the batch service never receives
+registry shorthand or an `Environment` object in
 `ModelConfiguration.EnvironmentId`.
 
 The online workflow targets an Azure ML **Kubernetes online endpoint**, not a
