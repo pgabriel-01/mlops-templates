@@ -5,41 +5,33 @@ import argparse
 
 from azure.ai.ml.entities import ManagedOnlineEndpoint
 
-from azure.identity import DefaultAzureCredential
-from azure.ai.ml import MLClient
+from aml_client import add_workspace_arguments, create_ml_client, wait_for_poller
 
-import json
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Create online endpoint")
-    parser.add_argument("--endpoint_name", type=str, help="Name of online endpoint")
-    parser.add_argument("--description", type=str, help="Description of the online endpoint")
-    parser.add_argument("--auth_mode", type=str, help="endpoint authentication mode", default="aml_token")
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Create or update an online endpoint.")
+    add_workspace_arguments(parser)
+    parser.add_argument("--endpoint_name", required=True)
+    parser.add_argument("--description")
+    parser.add_argument("--auth_mode", default="aml_token")
     return parser.parse_args()
 
-def main():
-    args = parse_args()
-    print(args)
-    
-    credential = DefaultAzureCredential()
-    try:
-        ml_client = MLClient.from_config(credential, path='config.json')
 
-    except Exception as ex:
-        print("HERE IN THE EXCEPTION BLOCK")
-        print(ex)
-
-    # create an online endpoint
-    online_endpoint = ManagedOnlineEndpoint(
-        name=args.endpoint_name, 
+def run(args: argparse.Namespace):
+    ml_client = create_ml_client(args)
+    endpoint = ManagedOnlineEndpoint(
+        name=args.endpoint_name,
         description=args.description,
         auth_mode=args.auth_mode,
     )
-    
-    endpoint_job = ml_client.online_endpoints.begin_create_or_update(
-        online_endpoint,   
+    return wait_for_poller(
+        ml_client.online_endpoints.begin_create_or_update(endpoint)
     )
-    endpoint_job.wait()
+
+
+def main() -> None:
+    run(parse_args())
+
 
 if __name__ == "__main__":
     main()

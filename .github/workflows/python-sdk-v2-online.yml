@@ -1,0 +1,151 @@
+name: Python SDK v2 - online endpoint
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      sdk_repository:
+        required: true
+        type: string
+      sdk_ref:
+        required: true
+        type: string
+      resource_group:
+        required: true
+        type: string
+      workspace_name:
+        required: true
+        type: string
+      endpoint_name:
+        required: true
+        type: string
+      deployment_name:
+        required: true
+        type: string
+      model_name:
+        required: true
+        type: string
+      model_version:
+        required: true
+        type: string
+      request_file:
+        required: true
+        type: string
+      instance_type:
+        required: false
+        default: Standard_DS2_v2
+        type: string
+      instance_count:
+        required: false
+        default: 1
+        type: number
+      traffic_allocation:
+        required: false
+        default: 100
+        type: number
+      python_version:
+        required: false
+        default: "3.11"
+        type: string
+      runner:
+        required: false
+        default: ubuntu-24.04
+        type: string
+    outputs:
+      endpoint_name:
+        value: ${{ jobs.deploy_test.outputs.endpoint_name }}
+      deployment_name:
+        value: ${{ jobs.deploy_test.outputs.deployment_name }}
+    secrets:
+      AZURE_CLIENT_ID:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+
+jobs:
+  deploy_test:
+    environment: ${{ inputs.environment }}
+    runs-on: ${{ inputs.runner }}
+    outputs:
+      endpoint_name: ${{ inputs.endpoint_name }}
+      deployment_name: ${{ inputs.deployment_name }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout consumer repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Checkout Python SDK layer
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ inputs.sdk_repository }}
+          ref: ${{ inputs.sdk_ref }}
+          path: .mlops-python-sdk
+      - name: Set up Python
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38
+        with:
+          python-version: ${{ inputs.python_version }}
+          cache: pip
+          cache-dependency-path: .mlops-python-sdk/src/python-sdk-v2/requirements.txt
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Install pinned Python SDK dependencies
+        run: python -m pip install --requirement .mlops-python-sdk/src/python-sdk-v2/requirements.txt
+      - name: Create or update endpoint
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          RESOURCE_GROUP: ${{ inputs.resource_group }}
+          WORKSPACE_NAME: ${{ inputs.workspace_name }}
+          ENDPOINT_NAME: ${{ inputs.endpoint_name }}
+        run: |
+          python .mlops-python-sdk/src/python-sdk-v2/create_online_endpoint.py \
+            --subscription_id "$AZURE_SUBSCRIPTION_ID" \
+            --resource_group "$RESOURCE_GROUP" \
+            --workspace_name "$WORKSPACE_NAME" \
+            --endpoint_name "$ENDPOINT_NAME"
+      - name: Create or update deployment and traffic
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          RESOURCE_GROUP: ${{ inputs.resource_group }}
+          WORKSPACE_NAME: ${{ inputs.workspace_name }}
+          ENDPOINT_NAME: ${{ inputs.endpoint_name }}
+          DEPLOYMENT_NAME: ${{ inputs.deployment_name }}
+          MODEL_NAME: ${{ inputs.model_name }}
+          MODEL_VERSION: ${{ inputs.model_version }}
+          INSTANCE_TYPE: ${{ inputs.instance_type }}
+          INSTANCE_COUNT: ${{ inputs.instance_count }}
+          TRAFFIC_ALLOCATION: ${{ inputs.traffic_allocation }}
+        run: |
+          python .mlops-python-sdk/src/python-sdk-v2/create_online_deployment.py \
+            --subscription_id "$AZURE_SUBSCRIPTION_ID" \
+            --resource_group "$RESOURCE_GROUP" \
+            --workspace_name "$WORKSPACE_NAME" \
+            --endpoint_name "$ENDPOINT_NAME" \
+            --deployment_name "$DEPLOYMENT_NAME" \
+            --model_name "$MODEL_NAME" \
+            --model_version "$MODEL_VERSION" \
+            --instance_type "$INSTANCE_TYPE" \
+            --instance_count "$INSTANCE_COUNT" \
+            --traffic_allocation "$TRAFFIC_ALLOCATION"
+      - name: Invoke endpoint
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          RESOURCE_GROUP: ${{ inputs.resource_group }}
+          WORKSPACE_NAME: ${{ inputs.workspace_name }}
+          ENDPOINT_NAME: ${{ inputs.endpoint_name }}
+          REQUEST_FILE: ${{ inputs.request_file }}
+        run: |
+          python .mlops-python-sdk/src/python-sdk-v2/test_online_endpoint.py \
+            --subscription_id "$AZURE_SUBSCRIPTION_ID" \
+            --resource_group "$RESOURCE_GROUP" \
+            --workspace_name "$WORKSPACE_NAME" \
+            --endpoint_name "$ENDPOINT_NAME" \
+            --request_file "$REQUEST_FILE"
