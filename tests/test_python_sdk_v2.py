@@ -1,5 +1,6 @@
 import argparse
 import importlib
+import os
 import re
 import sys
 from pathlib import Path
@@ -19,6 +20,7 @@ create_batch_endpoint = importlib.import_module("create_batch_endpoint")
 create_online_deployment = importlib.import_module("create_online_deployment")
 create_online_endpoint = importlib.import_module("create_online_endpoint")
 test_batch_endpoint = importlib.import_module("test_batch_endpoint")
+test_online_endpoint = importlib.import_module("test_online_endpoint")
 train_and_register_model = importlib.import_module("train_and_register_model")
 
 @pytest.mark.parametrize("ci_environment", ["GITHUB_ACTIONS", "CI"])
@@ -143,6 +145,7 @@ def test_online_workflow_requires_private_kubernetes_contract():
         "environment_version",
         "instance_type",
         "instance_count",
+        "tls_ca_key_vault_secret_id",
     ):
         assert required_input in inputs
     assert inputs["runner"]["required"] is True
@@ -150,11 +153,48 @@ def test_online_workflow_requires_private_kubernetes_contract():
     assert inputs["environment_name"]["required"] is True
     assert inputs["environment_version"]["required"] is True
     assert inputs["instance_type"]["required"] is True
+    assert inputs["tls_ca_key_vault_secret_id"]["required"] is True
+    assert inputs["endpoint_uami_resource_id"]["required"] is False
     assert "ubuntu-24.04" not in workflow
     assert "Standard_DS2_v2" not in workflow
     assert "--compute \"$COMPUTE\"" in workflow
     assert "--environment_name \"$ENVIRONMENT_NAME\"" in workflow
     assert "--environment_version \"$ENVIRONMENT_VERSION\"" in workflow
+    assert "az keyvault secret show" in workflow
+    assert "--id \"$TLS_CA_KEY_VAULT_SECRET_ID\"" in workflow
+    assert (
+        "REQUESTS_CA_BUNDLE: ${{ steps.private_ca.outputs.ca_bundle_path }}"
+        in workflow
+    )
+    assert "SSL_CERT_FILE: ${{ steps.private_ca.outputs.ca_bundle_path }}" in workflow
+    assert "openssl crl2pkcs7 -nocrl -certfile" in workflow
+    assert "echo \"::add-mask::$TLS_CA_KEY_VAULT_SECRET_ID\"" in workflow
+    assert "if: ${{ always() }}" in workflow
+    assert "rm -f -- \"$CA_BUNDLE_PATH\"" in workflow
+    assert "cat \"$ca_bundle_path\"" not in workflow
+    assert "verify=false" not in workflow.lower()
+    assert "--insecure" not in workflow.lower()
+    steps = parsed["jobs"]["deploy_test"]["steps"]
+    invoke_step = next(step for step in steps if step["name"] == "Invoke endpoint")
+    cleanup_step = next(
+        step
+        for step in steps
+        if step["name"] == "Remove private endpoint CA bundle"
+    )
+    assert invoke_step["env"]["REQUESTS_CA_BUNDLE"] == (
+        "${{ steps.private_ca.outputs.ca_bundle_path }}"
+    )
+    assert invoke_step["env"]["SSL_CERT_FILE"] == (
+        "${{ steps.private_ca.outputs.ca_bundle_path }}"
+    )
+    assert all(
+        "REQUESTS_CA_BUNDLE" not in step.get("env", {})
+        and "SSL_CERT_FILE" not in step.get("env", {})
+        for step in steps
+        if step is not invoke_step
+    )
+    assert cleanup_step["if"] == "${{ always() }}"
+    assert steps[-1] is cleanup_step
     action_refs = re.findall(r"uses:\s+\S+@(\S+)", workflow)
     assert action_refs
     assert all(re.fullmatch(r"[0-9a-f]{40}", ref) for ref in action_refs)
@@ -206,6 +246,133 @@ def test_online_endpoint_uses_attached_arc_kubernetes_compute(monkeypatch):
     client.online_endpoints.begin_create_or_update.assert_called_once_with(
         "kubernetes-endpoint"
     )
+
+
+def test_online_endpoint_sets_explicit_user_assigned_identity(monkeypatch):
+    client = Mock()
+    compute = _arc_kubernetes_compute()
+    client.compute.get.return_value = compute
+    endpoint_poller = Mock()
+    endpoint_poller.result.return_value = SimpleNamespace(
+        provisioning_state="Succeeded"
+    )
+    client.online_endpoints.begin_create_or_update.return_value = endpoint_poller
+    client.online_endpoints.get.return_value = SimpleNamespace(
+        provisioning_state="Succeeded"
+    )
+    endpoint_type = Mock(return_value="kubernetes-endpoint")
+    monkeypatch.setattr(create_online_endpoint, "create_ml_client", lambda _: client)
+    monkeypatch.setattr(
+        create_online_endpoint,
+        "KubernetesOnlineEndpoint",
+        endpoint_type,
+    )
+    args = _online_endpoint_args()
+    args.endpoint_uami_resource_id = (
+        "/subscriptions/sub/resourceGroups/rg/providers/"
+        "Microsoft.ManagedIdentity/userAssignedIdentities/online-endpoint"
+    )
+
+    create_online_endpoint.run(args)
+
+    identity = endpoint_type.call_args.kwargs["identity"]
+    assert identity.type == "user_assigned"
+    assert [
+        item.resource_id for item in identity.user_assigned_identities
+    ] == [args.endpoint_uami_resource_id]
+
+
+@pytest.mark.parametrize(
+    "resource_id",
+    [
+        "system_assigned",
+        "/subscriptions/sub/resourceGroups/rg/providers/"
+        "Microsoft.ContainerService/managedClusters/private-aks",
+        " /subscriptions/sub/resourceGroups/rg/providers/"
+        "Microsoft.ManagedIdentity/userAssignedIdentities/endpoint",
+    ],
+)
+def test_online_endpoint_rejects_non_uami_identity(resource_id):
+    with pytest.raises(RuntimeError, match="System-assigned and AKS node identity"):
+        aml_client.get_user_assigned_identity_configuration(resource_id)
+
+
+def test_online_endpoint_invocation_scopes_ca_environment(monkeypatch, tmp_path):
+    ca_bundle = tmp_path / "private-ca.pem"
+    ca_bundle.write_text("PEM certificate", encoding="utf-8")
+    client = Mock()
+    client.online_endpoints.invoke.return_value = "response"
+    observed_environment = {}
+
+    def invoke(**_):
+        observed_environment.update(
+            {
+                variable: os.environ.get(variable)
+                for variable in aml_client.CA_BUNDLE_ENVIRONMENT_VARIABLES
+            }
+        )
+        return "response"
+
+    client.online_endpoints.invoke.side_effect = invoke
+    monkeypatch.setattr(test_online_endpoint, "create_ml_client", lambda _: client)
+    monkeypatch.setattr(aml_client.ssl, "create_default_context", Mock())
+    monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    args = argparse.Namespace(
+        endpoint_name="endpoint",
+        request_file="request.json",
+        ca_bundle=str(ca_bundle),
+    )
+
+    result = test_online_endpoint.run(args)
+
+    assert result == "response"
+    expected_path = str(ca_bundle.resolve())
+    assert observed_environment == {
+        "REQUESTS_CA_BUNDLE": expected_path,
+        "SSL_CERT_FILE": expected_path,
+    }
+    assert "REQUESTS_CA_BUNDLE" not in os.environ
+    assert "SSL_CERT_FILE" not in os.environ
+    client.online_endpoints.invoke.assert_called_once_with(
+        endpoint_name="endpoint",
+        request_file="request.json",
+    )
+
+
+def test_private_ca_bundle_restores_existing_environment(monkeypatch, tmp_path):
+    ca_bundle = tmp_path / "private-ca.pem"
+    ca_bundle.write_text("PEM certificate", encoding="utf-8")
+    monkeypatch.setattr(aml_client.ssl, "create_default_context", Mock())
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", "/existing/requests.pem")
+    monkeypatch.setenv("SSL_CERT_FILE", "/existing/ssl.pem")
+
+    with aml_client.use_private_ca_bundle(str(ca_bundle)):
+        pass
+
+    assert os.environ["REQUESTS_CA_BUNDLE"] == "/existing/requests.pem"
+    assert os.environ["SSL_CERT_FILE"] == "/existing/ssl.pem"
+
+
+def test_private_ca_bundle_requires_readable_file():
+    with pytest.raises(RuntimeError, match="missing or unreadable"):
+        with aml_client.use_private_ca_bundle("/missing/private-ca.pem"):
+            pass
+
+
+def test_private_ca_bundle_is_required():
+    with pytest.raises(RuntimeError, match="requires a CA bundle"):
+        with aml_client.use_private_ca_bundle(""):
+            pass
+
+
+def test_private_ca_bundle_rejects_invalid_certificate(tmp_path):
+    ca_bundle = tmp_path / "invalid-ca.pem"
+    ca_bundle.write_text("not a certificate", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="not a valid PEM certificate bundle"):
+        with aml_client.use_private_ca_bundle(str(ca_bundle)):
+            pass
 
 
 def test_online_compute_accepts_direct_aks_attachment_with_uami():
@@ -784,6 +951,7 @@ def _online_endpoint_args():
         compute="arc-inference",
         description=None,
         auth_mode="aml_token",
+        endpoint_uami_resource_id=None,
     )
 
 

@@ -4,11 +4,14 @@
 import argparse
 import os
 import re
+import ssl
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from azure.ai.ml import MLClient
+from azure.ai.ml.entities import IdentityConfiguration, ManagedIdentityConfiguration
 from azure.core.exceptions import ResourceExistsError
 from azure.identity import AzureCliCredential, DefaultAzureCredential
 
@@ -55,6 +58,12 @@ SAS_PARAMETER_PATTERN = re.compile(
     r"(?i)([?&](?:sig|se|sp|spr|sr|sv|st)=)[^&\s]+"
 )
 IMAGE_DIGEST_PATTERN = re.compile(r"@sha256:[0-9a-f]{64}$", re.IGNORECASE)
+USER_ASSIGNED_IDENTITY_RESOURCE_ID_PATTERN = re.compile(
+    r"^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/"
+    r"Microsoft\.ManagedIdentity/userAssignedIdentities/[^/]+$",
+    re.IGNORECASE,
+)
+CA_BUNDLE_ENVIRONMENT_VARIABLES = ("REQUESTS_CA_BUNDLE", "SSL_CERT_FILE")
 
 
 def add_workspace_arguments(parser: argparse.ArgumentParser) -> None:
@@ -120,6 +129,69 @@ def create_ml_client(args: argparse.Namespace) -> MLClient:
         subscription_id=args.subscription_id,
         resource_group_name=args.resource_group,
         workspace_name=args.workspace_name,
+    )
+
+
+@contextmanager
+def use_private_ca_bundle(ca_bundle: str) -> Iterator[Path]:
+    if not ca_bundle or not ca_bundle.strip():
+        raise RuntimeError(
+            "Private endpoint invocation requires a CA bundle fetched from the "
+            "configured Key Vault secret."
+        )
+
+    ca_bundle_path = Path(ca_bundle).expanduser()
+    if not ca_bundle_path.is_file():
+        raise RuntimeError(
+            f"Private endpoint CA bundle '{ca_bundle_path}' is missing or unreadable."
+        )
+
+    try:
+        ssl.create_default_context(cafile=str(ca_bundle_path))
+    except (OSError, ssl.SSLError) as exc:
+        raise RuntimeError(
+            f"Private endpoint CA bundle '{ca_bundle_path}' is not a valid PEM "
+            "certificate bundle."
+        ) from exc
+
+    previous_values = {
+        variable: os.environ.get(variable)
+        for variable in CA_BUNDLE_ENVIRONMENT_VARIABLES
+    }
+    resolved_path = ca_bundle_path.resolve()
+    for variable in CA_BUNDLE_ENVIRONMENT_VARIABLES:
+        os.environ[variable] = str(resolved_path)
+
+    try:
+        yield resolved_path
+    finally:
+        for variable, previous_value in previous_values.items():
+            if previous_value is None:
+                os.environ.pop(variable, None)
+            else:
+                os.environ[variable] = previous_value
+
+
+def get_user_assigned_identity_configuration(
+    resource_id: str | None,
+) -> IdentityConfiguration | None:
+    if resource_id is None or not resource_id.strip():
+        return None
+    if (
+        resource_id != resource_id.strip()
+        or not USER_ASSIGNED_IDENTITY_RESOURCE_ID_PATTERN.fullmatch(resource_id)
+    ):
+        raise RuntimeError(
+            "Endpoint user-assigned identity must be a full Azure resource ID in "
+            "'/subscriptions/<subscription>/resourceGroups/<resource-group>/providers/"
+            "Microsoft.ManagedIdentity/userAssignedIdentities/<identity>' format. "
+            "System-assigned and AKS node identity fallback are not supported."
+        )
+    return IdentityConfiguration(
+        type="user_assigned",
+        user_assigned_identities=[
+            ManagedIdentityConfiguration(resource_id=resource_id)
+        ],
     )
 
 
