@@ -3,7 +3,7 @@ import importlib
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -189,20 +189,184 @@ def test_batch_invoke_waits_for_terminal_success(monkeypatch):
     waiter.assert_called_once_with(client, "batch-job")
 
 
-def test_failed_job_surfaces_parent_and_child_diagnostics(monkeypatch, capsys):
-    failed = SimpleNamespace(name="parent", status="Failed", error="parent error")
-    child = SimpleNamespace(name="child", status="Failed", error="child error")
+def test_failed_job_downloads_child_logs_and_surfaces_root_cause(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    failed = SimpleNamespace(name="parent", status="Failed", error=None)
+    child = SimpleNamespace(name="child", status="Failed", error=None)
     client = Mock()
     client.jobs.get.return_value = failed
     client.jobs.list.return_value = [child]
+
+    def download_child_logs(*, name, download_path, all):
+        assert name == "child"
+        assert all is False
+        log_path = Path(download_path) / "user_logs" / "std_log.txt"
+        log_path.parent.mkdir(parents=True)
+        log_path.write_text(
+            "starting training\n"
+            "Traceback (most recent call last):\n"
+            "  File \"train.py\", line 42, in <module>\n"
+            "ValueError: decisive root cause\n",
+            encoding="utf-8",
+        )
+
+    client.jobs.download.side_effect = download_child_logs
     monkeypatch.setattr(aml_client.time, "sleep", Mock())
+    monkeypatch.setenv("AML_DIAGNOSTICS_DIR", str(tmp_path / "diagnostics"))
 
     with pytest.raises(RuntimeError, match="finished with status Failed"):
         aml_client.wait_for_job(client, "parent", poll_interval_seconds=0)
 
     output = capsys.readouterr().out
-    assert "parent error" in output
-    assert "Child job child: status=Failed, error=child error" in output
+    assert "Child job child: status=Failed" in output
+    assert "Traceback (most recent call last)" in output
+    assert "ValueError: decisive root cause" in output
+    client.jobs.download.assert_called_once_with(
+        name="child",
+        download_path=str(tmp_path / "diagnostics" / "parent" / "child"),
+        all=False,
+    )
+
+
+def test_failed_job_reports_download_failure_and_falls_back_to_parent(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    failed = SimpleNamespace(name="parent", status="Failed", error=None)
+    client = Mock()
+    client.jobs.get.return_value = failed
+    client.jobs.list.return_value = []
+    client.jobs.download.side_effect = RuntimeError("private storage unavailable")
+    monkeypatch.setenv("AML_DIAGNOSTICS_DIR", str(tmp_path / "diagnostics"))
+
+    with pytest.raises(RuntimeError, match="finished with status Failed"):
+        aml_client.wait_for_job(client, "parent", poll_interval_seconds=0)
+
+    output = capsys.readouterr().out
+    assert (
+        "Unable to download diagnostics for job parent: "
+        "private storage unavailable"
+    ) in output
+    client.jobs.download.assert_called_once_with(
+        name="parent",
+        download_path=str(tmp_path / "diagnostics" / "parent" / "parent"),
+        all=False,
+    )
+
+
+def test_failed_leaf_retries_full_download_when_standard_download_is_pointer(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    failed_leaf = SimpleNamespace(
+        name="imgbldrun_1175c66",
+        status="Failed",
+        error=None,
+    )
+    client = Mock()
+    client.jobs.get.return_value = failed_leaf
+    client.jobs.list.return_value = []
+
+    def download_leaf_logs(*, name, download_path, all):
+        assert name == "imgbldrun_1175c66"
+        download_root = Path(download_path)
+        if not all:
+            (download_root / "artifact_download_info.json").write_text(
+                '{"status": "available"}',
+                encoding="utf-8",
+            )
+            return
+        log_path = download_root / "logs" / "image_build.log"
+        log_path.parent.mkdir(parents=True)
+        log_path.write_text(
+            "Traceback (most recent call last):\n"
+            "RuntimeError: image build root cause\n",
+            encoding="utf-8",
+        )
+
+    client.jobs.download.side_effect = download_leaf_logs
+    monkeypatch.setenv("AML_DIAGNOSTICS_DIR", str(tmp_path / "diagnostics"))
+
+    with pytest.raises(RuntimeError, match="finished with status Failed"):
+        aml_client.wait_for_job(
+            client,
+            "imgbldrun_1175c66",
+            poll_interval_seconds=0,
+        )
+
+    output = capsys.readouterr().out
+    assert "retrying full job download" in output
+    assert "RuntimeError: image build root cause" in output
+    download_path = str(
+        tmp_path
+        / "diagnostics"
+        / "imgbldrun_1175c66"
+        / "imgbldrun_1175c66"
+    )
+    assert client.jobs.download.call_args_list == [
+        call(
+            name="imgbldrun_1175c66",
+            download_path=download_path,
+            all=False,
+        ),
+        call(
+            name="imgbldrun_1175c66",
+            download_path=download_path,
+            all=True,
+        ),
+    ]
+
+
+def test_diagnostic_read_failure_is_explicit(monkeypatch, tmp_path, capsys):
+    job = SimpleNamespace(name="parent", status="Failed", error=None)
+    client = Mock()
+
+    def download_logs(*, name, download_path, all):
+        log_path = Path(download_path) / "std_log.txt"
+        log_path.write_text("Error: hidden", encoding="utf-8")
+
+    client.jobs.download.side_effect = download_logs
+    original_open = Path.open
+
+    def fail_diagnostic_read(path, *args, **kwargs):
+        if path.name == "std_log.txt" and args == ("rb",):
+            raise OSError("read denied")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_diagnostic_read)
+
+    aml_client._download_and_print_job_diagnostics(client, job, tmp_path)
+
+    output = capsys.readouterr().out
+    assert "Unable to read diagnostic file" in output
+    assert "read denied" in output
+
+
+def test_diagnostic_output_is_redacted_and_bounded():
+    sensitive_value = "sample-sensitive-value"
+    content = (
+        "authorization="
+        + "Bearer "
+        + sensitive_value
+        + "\napi_key="
+        + sensitive_value
+        + "\nError: request failed?sig="
+        + sensitive_value
+        + "&se=tomorrow\n"
+        + ("x" * 200)
+    )
+
+    excerpt = aml_client._diagnostic_excerpt(content, max_chars=80)
+
+    assert sensitive_value not in excerpt
+    assert "[REDACTED]" in excerpt
+    assert len(excerpt) < 130
+    assert "diagnostic output truncated" in excerpt
 
 
 def test_training_waits_then_registers_job_output(monkeypatch):
@@ -268,3 +432,47 @@ def test_training_writes_reusable_workflow_outputs(monkeypatch, tmp_path):
         "model_name=forecast",
         "model_version=3",
     ]
+
+
+def test_training_job_name_is_written_before_failed_wait(monkeypatch, tmp_path):
+    client = Mock()
+    client.jobs.create_or_update.return_value = SimpleNamespace(name="training-job")
+    output_file = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
+    monkeypatch.setattr(train_and_register_model, "create_ml_client", lambda _: client)
+    monkeypatch.setattr(train_and_register_model, "load_job", lambda source: source)
+    monkeypatch.setattr(
+        train_and_register_model,
+        "wait_for_job",
+        Mock(side_effect=RuntimeError("training failed")),
+    )
+    args = argparse.Namespace(
+        job_file="jobs/train.yml",
+        model_name="forecast",
+        model_output_name="model",
+        model_type="mlflow_model",
+    )
+
+    with pytest.raises(RuntimeError, match="training failed"):
+        train_and_register_model.run(args)
+
+    assert output_file.read_text(encoding="utf-8").splitlines() == [
+        "training_job_name=training-job"
+    ]
+
+
+def test_train_workflow_uploads_failed_diagnostics_with_pinned_action():
+    workflow = (
+        Path(__file__).parents[1]
+        / ".github"
+        / "workflows"
+        / "python-sdk-v2-train-register.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "if: ${{ failure() }}" in workflow
+    assert (
+        "uses: actions/upload-artifact@"
+        "ea165f8d65b6e75b540449e92b4886f43607fa02"
+    ) in workflow
+    assert "path: aml-diagnostics" in workflow
+    assert "if-no-files-found: warn" in workflow

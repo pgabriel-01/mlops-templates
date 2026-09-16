@@ -115,3 +115,10 @@ jobs:
             --model_name "$MODEL_NAME" \
             --model_output_name "$MODEL_OUTPUT_NAME" \
             --model_type "$MODEL_TYPE"
+      - name: Upload Azure ML diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: aml-diagnostics-${{ steps.train.outputs.training_job_name || github.run_id }}
+          path: aml-diagnostics
+          if-no-files-found: warn
