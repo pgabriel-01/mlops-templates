@@ -69,7 +69,7 @@ def validate_immutable_environment_reference(reference: str) -> str:
     return normalized_reference
 
 
-def resolve_batch_environment(ml_client: object, reference: str) -> str:
+def resolve_batch_environment(ml_client: object, reference: str) -> str | object:
     registry_match = REGISTRY_ENVIRONMENT_PATTERN.fullmatch(reference)
     if not registry_match:
         return reference
@@ -157,7 +157,19 @@ def resolve_batch_environment(ml_client: object, reference: str) -> str:
             f"its authoritative operation scope. returned={environment_id!r}, "
             f"scope={resolved_id!r}"
         )
-    return resolved_id
+    try:
+        environment._id = resolved_id
+    except Exception as exc:
+        raise RuntimeError(
+            "Unable to assign the authoritative full ARM ID to the fetched "
+            "registry Environment entity."
+        ) from exc
+    if str(getattr(environment, "id", "") or "") != resolved_id:
+        raise RuntimeError(
+            "The fetched registry Environment entity did not retain the "
+            "authoritative full ARM ID."
+        )
+    return environment
 
 
 def resolve_scoring_code(

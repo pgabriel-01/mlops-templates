@@ -42,10 +42,11 @@ workspaces that enforce `allowSharedKeyAccess=false`. Registry shorthand is
 resolved with a registry-scoped SDK client using the same OIDC-backed
 credential. Because the SDK returns registry shorthand from `Environment.id`,
 the exact numeric version is verified by lookup and its full ARM resource ID is
-constructed from the registry client's authoritative operation scope. Missing
-or unsafe scope data fails closed, and the batch service never receives
-registry shorthand or an `Environment` object in
-`ModelConfiguration.EnvironmentId`.
+constructed from the registry client's authoritative operation scope and set
+on the fetched `Environment` entity. Passing the entity is required because the
+pinned SDK's dependency orchestrator rejects raw registry ARM ID strings; it
+extracts the corrected entity ID before REST serialization. Missing or unsafe
+scope data and entity assignment/readback failure fail closed.
 
 The online workflow targets an Azure ML **Kubernetes online endpoint**, not a
 managed online endpoint. It supports two explicit deployment modes:
