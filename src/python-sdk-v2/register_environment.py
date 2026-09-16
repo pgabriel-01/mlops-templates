@@ -3,54 +3,46 @@
 
 import argparse
 
-from azure.ai.ml.entities import Environment, BuildContext
+from azure.ai.ml.entities import BuildContext, Environment
 
-from azure.identity import DefaultAzureCredential
-from azure.ai.ml import MLClient
+from aml_client import add_workspace_arguments, create_ml_client
 
-import json
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Register Environment")
-    parser.add_argument("--environment_name", type=str, help="Name of the environment you want to register")
-    parser.add_argument("--description", type=str, help="Description of the environment")
-    parser.add_argument("--env_path", type=str, help="Local path of environment file(s)")
-    parser.add_argument("--build_type", type=str, help="Build type: either docker or conda")
-    parser.add_argument("--base_image", type=str, help="base image path", default="mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu22.04")
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Register an environment.")
+    add_workspace_arguments(parser)
+    parser.add_argument("--environment_name", required=True)
+    parser.add_argument("--description")
+    parser.add_argument("--env_path", required=True)
+    parser.add_argument("--build_type", choices=("docker", "conda"), required=True)
+    parser.add_argument(
+        "--base_image",
+        default="mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu22.04",
+    )
     return parser.parse_args()
 
-def main():
-    args = parse_args()
-    print(args)
-    
-    credential = DefaultAzureCredential()
-    try:
-        ml_client = MLClient.from_config(credential, path='config.json')
 
-    except Exception as ex:
-        print("Could not find config.json or config.json is not in the right format.")
-        print(ex)
-
-    build_type = args.build_type
-    if build_type == 'docker':
-        print("Using docker build contect")
+def run(args: argparse.Namespace):
+    ml_client = create_ml_client(args)
+    if args.build_type == "docker":
         environment = Environment(
             name=args.environment_name,
             build=BuildContext(path=args.env_path),
-            description=args.description
+            description=args.description,
         )
-    elif build_type == 'conda':
+    else:
         environment = Environment(
             image=args.base_image,
             conda_file=args.env_path,
             name=args.environment_name,
-            description=args.description
+            description=args.description,
         )
-    else: 
-        print("Expected 'docker' or 'conda' as build type.")
-        print(ex)
+    return ml_client.environments.create_or_update(environment)
 
-    ml_client.environments.create_or_update(environment)    
+
+def main() -> None:
+    run(parse_args())
+
 
 if __name__ == "__main__":
     main()

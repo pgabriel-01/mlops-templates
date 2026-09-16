@@ -3,42 +3,43 @@
 
 import argparse
 
-from azure.ai.ml.entities import BatchEndpoint
 from azure.ai.ml import Input
-from azure.ai.ml.constants import AssetTypes, InputOutputModes
+from azure.ai.ml.constants import InputOutputModes
 
-from azure.identity import DefaultAzureCredential
-from azure.ai.ml import MLClient
+from aml_client import add_workspace_arguments, create_ml_client, wait_for_job
 
-import json
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Test batch endpoint")
-    parser.add_argument("--endpoint_name", type=str, help="Name of the batch endpoint")
-    parser.add_argument("--request_batch_file", type=str, help="Path of the request batch file")
-    parser.add_argument("--request_type", type=str, help="either uri_folder or uri_file")
-    
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Invoke a batch endpoint and wait for completion."
+    )
+    add_workspace_arguments(parser)
+    parser.add_argument("--endpoint_name", required=True)
+    parser.add_argument("--request_batch_file", required=True)
+    parser.add_argument(
+        "--request_type",
+        choices=("uri_folder", "uri_file"),
+        required=True,
+    )
     return parser.parse_args()
 
-def main():
-    args = parse_args()
-    print(args)
-    
-    credential = DefaultAzureCredential()
-    try:
-        ml_client = MLClient.from_config(credential, path='config.json')
 
-    except Exception as ex:
-        print("HERE IN THE EXCEPTION BLOCK")
-        print(ex)
-
-    # invoke the endpoint for batch scoring job
-    ml_client.batch_endpoints.invoke(
+def run(args: argparse.Namespace):
+    ml_client = create_ml_client(args)
+    invocation = ml_client.batch_endpoints.invoke(
         endpoint_name=args.endpoint_name,
-        input=Input(path=args.request_batch_file,
-                    type=args.request_type, 
-                    mode=InputOutputModes.DOWNLOAD)
+        input=Input(
+            path=args.request_batch_file,
+            type=args.request_type,
+            mode=InputOutputModes.DOWNLOAD,
+        ),
     )
+    return wait_for_job(ml_client, invocation.name)
+
+
+def main() -> None:
+    run(parse_args())
+
 
 if __name__ == "__main__":
     main()

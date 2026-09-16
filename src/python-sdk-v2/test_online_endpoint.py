@@ -3,37 +3,30 @@
 
 import argparse
 
-from azure.ai.ml.entities import ManagedOnlineEndpoint
-from azure.ai.ml.entities import ManagedOnlineDeployment
+from aml_client import add_workspace_arguments, create_ml_client
 
-from azure.identity import DefaultAzureCredential
-from azure.ai.ml import MLClient
 
-import json
-
-def parse_args():
-    parser = argparse.ArgumentParser(description="Test online endpoint")
-    parser.add_argument("--endpoint_name", type=str, help="Name of the online endpoint")
-    parser.add_argument("--request_file", type=str, help="Path of the request json file")
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Invoke an online endpoint.")
+    add_workspace_arguments(parser)
+    parser.add_argument("--endpoint_name", required=True)
+    parser.add_argument("--request_file", required=True)
     return parser.parse_args()
 
-def main():
-    args = parse_args()
-    print(args)
-    
-    credential = DefaultAzureCredential()
-    try:
-        ml_client = MLClient.from_config(credential, path='config.json')
 
-    except Exception as ex:
-        print("HERE IN THE EXCEPTION BLOCK")
-        print(ex)
-
-    # invoke and test endpoint
-    ml_client.online_endpoints.invoke(
+def run(args: argparse.Namespace):
+    ml_client = create_ml_client(args)
+    response = ml_client.online_endpoints.invoke(
         endpoint_name=args.endpoint_name,
-        request_file=args.request_file
+        request_file=args.request_file,
     )
+    print(response, flush=True)
+    return response
+
+
+def main() -> None:
+    run(parse_args())
+
 
 if __name__ == "__main__":
     main()
