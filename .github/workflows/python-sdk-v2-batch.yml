@@ -38,6 +38,14 @@ on:
         required: false
         default: azureml://registries/azureml/environments/sklearn-1.5/versions/53
         type: string
+      scoring_code_directory:
+        description: Consumer-repository-relative directory containing batch scoring code
+        required: true
+        type: string
+      scoring_script:
+        description: Scoring script path relative to scoring_code_directory
+        required: true
+        type: string
       request_batch_file:
         required: true
         type: string
@@ -124,6 +132,8 @@ jobs:
           MODEL_VERSION: ${{ inputs.model_version }}
           COMPUTE: ${{ inputs.compute }}
           DEPLOYMENT_ENVIRONMENT: ${{ inputs.deployment_environment }}
+          SCORING_CODE_DIRECTORY: ${{ inputs.scoring_code_directory }}
+          SCORING_SCRIPT: ${{ inputs.scoring_script }}
         run: |
           python .mlops-python-sdk/src/python-sdk-v2/create_batch_deployment.py \
             --subscription_id "$AZURE_SUBSCRIPTION_ID" \
@@ -134,7 +144,10 @@ jobs:
             --model_name "$MODEL_NAME" \
             --model_version "$MODEL_VERSION" \
             --compute "$COMPUTE" \
-            --environment "$DEPLOYMENT_ENVIRONMENT"
+            --environment "$DEPLOYMENT_ENVIRONMENT" \
+            --repository_root "$GITHUB_WORKSPACE" \
+            --scoring_code_directory "$SCORING_CODE_DIRECTORY" \
+            --scoring_script "$SCORING_SCRIPT"
       - name: Invoke endpoint and require successful completion
         env:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
