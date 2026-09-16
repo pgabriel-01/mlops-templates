@@ -30,12 +30,20 @@ on:
       model_version:
         required: true
         type: string
-      request_file:
+      compute:
+        required: true
+        type: string
+      environment_name:
+        required: true
+        type: string
+      environment_version:
         required: true
         type: string
       instance_type:
-        required: false
-        default: Standard_DS2_v2
+        required: true
+        type: string
+      request_file:
+        required: true
         type: string
       instance_count:
         required: false
@@ -50,8 +58,7 @@ on:
         default: "3.11"
         type: string
       runner:
-        required: false
-        default: ubuntu-24.04
+        required: true
         type: string
     outputs:
       endpoint_name:
@@ -107,12 +114,14 @@ jobs:
           RESOURCE_GROUP: ${{ inputs.resource_group }}
           WORKSPACE_NAME: ${{ inputs.workspace_name }}
           ENDPOINT_NAME: ${{ inputs.endpoint_name }}
+          COMPUTE: ${{ inputs.compute }}
         run: |
           python .mlops-python-sdk/src/python-sdk-v2/create_online_endpoint.py \
             --subscription_id "$AZURE_SUBSCRIPTION_ID" \
             --resource_group "$RESOURCE_GROUP" \
             --workspace_name "$WORKSPACE_NAME" \
-            --endpoint_name "$ENDPOINT_NAME"
+            --endpoint_name "$ENDPOINT_NAME" \
+            --compute "$COMPUTE"
       - name: Create or update deployment and traffic
         env:
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
@@ -122,6 +131,8 @@ jobs:
           DEPLOYMENT_NAME: ${{ inputs.deployment_name }}
           MODEL_NAME: ${{ inputs.model_name }}
           MODEL_VERSION: ${{ inputs.model_version }}
+          ENVIRONMENT_NAME: ${{ inputs.environment_name }}
+          ENVIRONMENT_VERSION: ${{ inputs.environment_version }}
           INSTANCE_TYPE: ${{ inputs.instance_type }}
           INSTANCE_COUNT: ${{ inputs.instance_count }}
           TRAFFIC_ALLOCATION: ${{ inputs.traffic_allocation }}
@@ -134,6 +145,8 @@ jobs:
             --deployment_name "$DEPLOYMENT_NAME" \
             --model_name "$MODEL_NAME" \
             --model_version "$MODEL_VERSION" \
+            --environment_name "$ENVIRONMENT_NAME" \
+            --environment_version "$ENVIRONMENT_VERSION" \
             --instance_type "$INSTANCE_TYPE" \
             --instance_count "$INSTANCE_COUNT" \
             --traffic_allocation "$TRAFFIC_ALLOCATION"

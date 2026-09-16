@@ -54,6 +54,7 @@ JWT_PATTERN = re.compile(
 SAS_PARAMETER_PATTERN = re.compile(
     r"(?i)([?&](?:sig|se|sp|spr|sr|sv|st)=)[^&\s]+"
 )
+IMAGE_DIGEST_PATTERN = re.compile(r"@sha256:[0-9a-f]{64}$", re.IGNORECASE)
 
 
 def add_workspace_arguments(parser: argparse.ArgumentParser) -> None:
@@ -439,3 +440,92 @@ def get_registered_model(
             "MLflow model; register it with model_type=mlflow_model."
         )
     return model
+
+
+def get_kubernetes_online_compute(ml_client: MLClient, compute_name: str) -> Any:
+    try:
+        compute = ml_client.compute.get(compute_name)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Attached Azure ML compute '{compute_name}' was not found. "
+            "Provision an Azure Arc-enabled Kubernetes cluster, install the "
+            "Azure ML extension, and attach it to the workspace before running "
+            "the online deployment workflow."
+        ) from exc
+
+    compute_type = str(getattr(compute, "type", "")).lower()
+    if compute_type != "kubernetes":
+        raise RuntimeError(
+            f"Azure ML compute '{compute_name}' has type "
+            f"'{getattr(compute, 'type', None)}'; the private online workflow "
+            "requires an attached Kubernetes compute."
+        )
+
+    resource_id = str(getattr(compute, "resource_id", "") or "")
+    if "/providers/microsoft.kubernetes/connectedclusters/" not in resource_id.lower():
+        raise RuntimeError(
+            f"Azure ML Kubernetes compute '{compute_name}' must be backed by an "
+            "Azure Arc-enabled Kubernetes connectedClusters resource. Direct AKS "
+            "attachment is unsupported when AKS local accounts are disabled."
+        )
+
+    provisioning_state = str(getattr(compute, "provisioning_state", ""))
+    if provisioning_state not in SUCCESS_PROVISIONING_STATES:
+        raise RuntimeError(
+            f"Azure ML Kubernetes compute '{compute_name}' is not ready; "
+            f"provisioning state is '{provisioning_state}'."
+        )
+
+    namespace = str(getattr(compute, "namespace", "")).strip()
+    if not namespace or namespace == "default":
+        raise RuntimeError(
+            f"Azure ML Kubernetes compute '{compute_name}' must use a dedicated "
+            "non-default namespace configured by infrastructure."
+        )
+
+    identity = getattr(compute, "identity", None)
+    identity_type = str(getattr(identity, "type", "")).lower().replace("_", "")
+    user_assigned_identities = getattr(identity, "user_assigned_identities", None)
+    if not identity_type.endswith("userassigned") or not user_assigned_identities:
+        raise RuntimeError(
+            f"Azure ML Kubernetes compute '{compute_name}' must use an "
+            "infrastructure-supplied user-assigned managed identity. AKS node "
+            "identity fallback is not supported."
+        )
+    return compute
+
+
+def get_prebuilt_environment(
+    ml_client: MLClient,
+    environment_name: str,
+    environment_version: str,
+) -> Any:
+    try:
+        environment = ml_client.environments.get(
+            name=environment_name,
+            version=environment_version,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Registered inference environment "
+            f"'{environment_name}:{environment_version}' was not found. "
+            "Register the immutable prebuilt environment before deployment."
+        ) from exc
+
+    image = str(getattr(environment, "image", "") or "")
+    if not IMAGE_DIGEST_PATTERN.search(image):
+        raise RuntimeError(
+            "Registered inference environment "
+            f"'{environment_name}:{environment_version}' must reference a "
+            "prebuilt container image by sha256 digest."
+        )
+    if getattr(environment, "build", None) is not None or getattr(
+        environment, "conda_file", None
+    ):
+        raise RuntimeError(
+            "Registered inference environment "
+            f"'{environment_name}:{environment_version}' includes a build "
+            "context or Conda specification. Private online deployment requires "
+            "an image-only environment so Azure ML never starts an image build."
+        )
+    return environment
