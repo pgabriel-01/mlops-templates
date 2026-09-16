@@ -222,6 +222,27 @@ def test_online_compute_accepts_direct_aks_attachment_with_uami():
     assert result is compute
 
 
+def test_online_compute_not_found_explains_direct_aks_trusted_access():
+    client = Mock()
+    client.compute.get.side_effect = RuntimeError("not found")
+
+    with pytest.raises(
+        RuntimeError,
+        match="Trusted Access mlworkload role binding",
+    ):
+        aml_client.get_kubernetes_online_compute(client, "direct-aks")
+
+
+def test_online_compute_rejects_non_kubernetes_compute_type():
+    client = Mock()
+    compute = _arc_kubernetes_compute()
+    compute.type = "amlcompute"
+    client.compute.get.return_value = compute
+
+    with pytest.raises(RuntimeError, match="requires an attached Kubernetes compute"):
+        aml_client.get_kubernetes_online_compute(client, "cpu-cluster")
+
+
 def test_online_compute_rejects_unsupported_cluster_resource():
     client = Mock()
     compute = _arc_kubernetes_compute()

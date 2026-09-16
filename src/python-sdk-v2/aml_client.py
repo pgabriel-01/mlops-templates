@@ -448,9 +448,11 @@ def get_kubernetes_online_compute(ml_client: MLClient, compute_name: str) -> Any
     except Exception as exc:
         raise RuntimeError(
             f"Attached Azure ML compute '{compute_name}' was not found. "
-            "Provision an Azure Arc-enabled Kubernetes cluster, install the "
-            "Azure ML extension, and attach it to the workspace before running "
-            "the online deployment workflow."
+            "Provision a supported Kubernetes cluster, install the Azure ML "
+            "extension, and attach it to the workspace. For direct private AKS "
+            "with local accounts disabled, infrastructure must first create the "
+            "per-workspace Trusted Access mlworkload role binding; Azure "
+            "Arc-enabled Kubernetes is the fallback."
         ) from exc
 
     compute_type = str(getattr(compute, "type", "")).lower()
