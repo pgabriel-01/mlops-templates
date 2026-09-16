@@ -22,11 +22,12 @@ with the same authenticated credential used by the workspace client, fetches
 the exact environment name and numeric version, and reads the registry client's
 authoritative subscription, resource group, and registry operation scope. The
 SDK can return registry shorthand in `Environment.id`, so the script validates
-that lookup result but constructs the full ARM ID from the canonical operation
-scope and passes that string to `BatchDeployment`. Missing, unsafe, or
-mismatched scope data fails closed. The workflow never submits the
-`azureml://registries/...` shorthand or an `Environment` object as
-`ModelConfiguration.EnvironmentId`.
+that lookup result, constructs the full ARM ID from the canonical operation
+scope, and assigns it to the fetched `Environment` entity. This entity is passed
+to `BatchDeployment` because SDK dependency orchestration rejects raw registry
+ARM ID strings; the SDK then extracts the corrected entity ID and writes the
+full ARM string to `ModelConfiguration.EnvironmentId`. Assignment/readback
+failure and missing, unsafe, or mismatched scope data fail closed.
 Workspace `azureml:<name>:<version>` references and full workspace or registry
 environment resource IDs remain supported without rewriting.
 

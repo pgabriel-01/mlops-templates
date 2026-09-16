@@ -10,6 +10,10 @@ from unittest.mock import Mock, call
 
 import pytest
 import yaml
+from azure.ai.ml._utils._endpoint_utils import upload_dependencies
+from azure.ai.ml.constants._common import AzureMLResourceType
+from azure.ai.ml.entities import Environment
+from azure.ai.ml.operations._operation_orchestrator import OperationOrchestrator
 from azure.core.exceptions import ResourceExistsError
 
 SDK_PATH = Path(__file__).parents[1] / "src" / "python-sdk-v2"
@@ -971,10 +975,13 @@ def test_batch_deployment_uses_explicit_immutable_environment(monkeypatch):
     client.batch_endpoints.begin_create_or_update.return_value = endpoint_poller
     batch_deployment_type = Mock(return_value=SimpleNamespace())
     code_configuration_type = Mock(return_value="code-configuration")
-    registry_client = Mock()
-    registry_client.environments.get.return_value = SimpleNamespace(
-        id=create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT
+    registry_environment = Environment(
+        name="sklearn-1.5",
+        version="53",
+        id=create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
     )
+    registry_client = Mock()
+    registry_client.environments.get.return_value = registry_environment
     registry_client.environments._operation_scope = SimpleNamespace(
         subscription_id="6c6683e9-e5fe-4038-8519-ce6ebec2ba15",
         resource_group_name="registry-builtin-prod-eastus-01",
@@ -1002,14 +1009,10 @@ def test_batch_deployment_uses_explicit_immutable_environment(monkeypatch):
     args.environment = create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT
     create_batch_deployment.run(args)
 
-    assert (
-        batch_deployment_type.call_args.kwargs["environment"]
-        == TEST_BATCH_ENVIRONMENT_ID
-    )
-    assert (
-        batch_deployment_type.call_args.kwargs["environment"]
-        != create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT
-    )
+    deployment_environment = batch_deployment_type.call_args.kwargs["environment"]
+    assert deployment_environment is registry_environment
+    assert not isinstance(deployment_environment, str)
+    assert deployment_environment.id == TEST_BATCH_ENVIRONMENT_ID
     assert "image" not in batch_deployment_type.call_args.kwargs
     assert (
         batch_deployment_type.call_args.kwargs["code_configuration"]
@@ -1170,20 +1173,62 @@ def test_registry_environment_resolution_rejects_scope_conflicting_full_id(
         )
 
 
-def test_resolved_registry_environment_serializes_as_full_arm_id():
+def test_registry_environment_entity_survives_sdk_dependency_orchestration():
+    environment = Environment(
+        name="sklearn-1.5",
+        version="53",
+        id=TEST_BATCH_ENVIRONMENT_ID,
+    )
+    orchestrator = object.__new__(OperationOrchestrator)
+
+    assert (
+        orchestrator.get_asset_arm_id(
+            environment,
+            azureml_type=AzureMLResourceType.ENVIRONMENT,
+        )
+        == TEST_BATCH_ENVIRONMENT_ID
+    )
     deployment = create_batch_deployment.BatchDeployment(
         name="batch-deployment",
         endpoint_name="batch-endpoint",
-        environment=TEST_BATCH_ENVIRONMENT_ID,
+        environment=environment,
     )
 
-    rest_deployment = deployment._to_rest_object(location="eastus")
-    serialized_environment_id = rest_deployment.serialize()["properties"][
-        "environmentId"
+    assert deployment.environment is environment
+    upload_dependencies(deployment, orchestrator)
+    assert deployment.environment == TEST_BATCH_ENVIRONMENT_ID
+    rest_deployment = deployment._to_rest_object(location="eastus2")
+    serialized_environment_id = rest_deployment.as_dict()["properties"][
+        "environment_id"
     ]
 
     assert serialized_environment_id == TEST_BATCH_ENVIRONMENT_ID
     assert not serialized_environment_id.startswith("azureml://")
+
+
+def test_registry_environment_resolution_fails_if_entity_id_cannot_be_replaced(
+    monkeypatch,
+):
+    registry_client = Mock()
+    registry_client.environments.get.return_value = SimpleNamespace(
+        id=create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT
+    )
+    registry_client.environments._operation_scope = SimpleNamespace(
+        subscription_id="6c6683e9-e5fe-4038-8519-ce6ebec2ba15",
+        resource_group_name="registry-builtin-prod-eastus-01",
+        registry_name="azureml",
+    )
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "create_registry_ml_client",
+        Mock(return_value=registry_client),
+    )
+
+    with pytest.raises(RuntimeError, match="did not retain"):
+        create_batch_deployment.resolve_batch_environment(
+            Mock(),
+            create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+        )
 
 
 @pytest.mark.parametrize(
