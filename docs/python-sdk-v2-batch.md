@@ -19,9 +19,14 @@ anonymous image build.
 
 For a registry URI, the deployment script creates a registry-scoped `MLClient`
 with the same authenticated credential used by the workspace client, fetches
-the exact environment name and numeric version, validates the returned resource
-ID, and passes that full ARM ID to `BatchDeployment`. It never submits the
-`azureml://registries/...` shorthand as `ModelConfiguration.EnvironmentId`.
+the exact environment name and numeric version, and reads the registry client's
+authoritative subscription, resource group, and registry operation scope. The
+SDK can return registry shorthand in `Environment.id`, so the script validates
+that lookup result but constructs the full ARM ID from the canonical operation
+scope and passes that string to `BatchDeployment`. Missing, unsafe, or
+mismatched scope data fails closed. The workflow never submits the
+`azureml://registries/...` shorthand or an `Environment` object as
+`ModelConfiguration.EnvironmentId`.
 Workspace `azureml:<name>:<version>` references and full workspace or registry
 environment resource IDs remain supported without rewriting.
 

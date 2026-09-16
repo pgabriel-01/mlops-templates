@@ -41,6 +41,11 @@ FULL_ENVIRONMENT_ID_PATTERN = re.compile(
     r"environments/[^/\s]+/versions/\d+",
     re.IGNORECASE,
 )
+SUBSCRIPTION_ID_PATTERN = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+    re.IGNORECASE,
+)
+ARM_RESOURCE_NAME_PATTERN = re.compile(r"[A-Za-z0-9._()-]+")
 
 
 def validate_immutable_environment_reference(reference: str) -> str:
@@ -70,6 +75,15 @@ def resolve_batch_environment(ml_client: object, reference: str) -> str:
         return reference
 
     registry_name, environment_name, version = registry_match.groups()
+    for field_name, value in (
+        ("registry", registry_name),
+        ("environment", environment_name),
+    ):
+        if not ARM_RESOURCE_NAME_PATTERN.fullmatch(value):
+            raise RuntimeError(
+                f"Immutable registry environment reference contains an unsafe "
+                f"{field_name} name."
+            )
     registry_client = create_registry_ml_client(ml_client, registry_name)
     try:
         environment = registry_client.environments.get(
@@ -82,13 +96,66 @@ def resolve_batch_environment(ml_client: object, reference: str) -> str:
             f"'{registry_name}/{environment_name}:{version}' was not found."
         ) from exc
 
-    resolved_id = str(getattr(environment, "id", "") or "")
+    operation_scope = getattr(registry_client.environments, "_operation_scope", None)
+    subscription_id = str(
+        getattr(operation_scope, "subscription_id", "") or ""
+    )
+    resource_group_name = str(
+        getattr(operation_scope, "resource_group_name", "") or ""
+    )
+    scoped_registry_name = str(
+        getattr(operation_scope, "registry_name", "") or ""
+    )
+    if not SUBSCRIPTION_ID_PATTERN.fullmatch(subscription_id):
+        raise RuntimeError(
+            "Azure ML registry operation scope returned a missing or invalid "
+            "subscription ID."
+        )
+    for field_name, value in (
+        ("resource group", resource_group_name),
+        ("registry", scoped_registry_name),
+        ("environment", environment_name),
+    ):
+        if not ARM_RESOURCE_NAME_PATTERN.fullmatch(value):
+            raise RuntimeError(
+                "Azure ML registry operation scope returned a missing or unsafe "
+                f"{field_name} name."
+            )
+    if scoped_registry_name.lower() != registry_name.lower():
+        raise RuntimeError(
+            "Azure ML registry operation scope did not match the requested "
+            f"registry. requested={registry_name!r}, "
+            f"resolved={scoped_registry_name!r}"
+        )
+
+    resolved_id = (
+        f"/subscriptions/{subscription_id}/resourceGroups/{resource_group_name}/"
+        "providers/Microsoft.MachineLearningServices/registries/"
+        f"{scoped_registry_name}/environments/{environment_name}/versions/{version}"
+    )
     if not FULL_ENVIRONMENT_ID_PATTERN.fullmatch(resolved_id) or not (
         _environment_matches(reference, resolved_id)
     ):
         raise RuntimeError(
-            "Azure ML returned an invalid or mismatched resource ID for immutable "
-            f"registry environment '{reference}'. resolved={resolved_id!r}"
+            "Azure ML registry operation scope could not produce the requested "
+            f"immutable environment resource ID. requested={reference!r}, "
+            f"resolved={resolved_id!r}"
+        )
+
+    environment_id = str(getattr(environment, "id", "") or "").rstrip("/")
+    if not environment_id or not _environment_matches(reference, environment_id):
+        raise RuntimeError(
+            "Azure ML returned a missing or mismatched ID for the exact registry "
+            f"environment lookup. requested={reference!r}, "
+            f"returned={environment_id!r}"
+        )
+    if FULL_ENVIRONMENT_ID_PATTERN.fullmatch(environment_id) and (
+        environment_id.lower() != resolved_id.lower()
+    ):
+        raise RuntimeError(
+            "Azure ML returned a full registry environment ID that conflicts with "
+            f"its authoritative operation scope. returned={environment_id!r}, "
+            f"scope={resolved_id!r}"
         )
     return resolved_id
 

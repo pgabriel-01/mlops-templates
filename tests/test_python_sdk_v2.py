@@ -15,7 +15,8 @@ from azure.core.exceptions import ResourceExistsError
 SDK_PATH = Path(__file__).parents[1] / "src" / "python-sdk-v2"
 sys.path.insert(0, str(SDK_PATH))
 TEST_BATCH_ENVIRONMENT_ID = (
-    "/subscriptions/sub/resourceGroups/azureml/providers/"
+    "/subscriptions/6c6683e9-e5fe-4038-8519-ce6ebec2ba15/"
+    "resourceGroups/registry-builtin-prod-eastus-01/providers/"
     "Microsoft.MachineLearningServices/registries/azureml/environments/"
     "sklearn-1.5/versions/53"
 )
@@ -972,7 +973,12 @@ def test_batch_deployment_uses_explicit_immutable_environment(monkeypatch):
     code_configuration_type = Mock(return_value="code-configuration")
     registry_client = Mock()
     registry_client.environments.get.return_value = SimpleNamespace(
-        id=TEST_BATCH_ENVIRONMENT_ID
+        id=create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT
+    )
+    registry_client.environments._operation_scope = SimpleNamespace(
+        subscription_id="6c6683e9-e5fe-4038-8519-ce6ebec2ba15",
+        resource_group_name="registry-builtin-prod-eastus-01",
+        registry_name="azureml",
     )
     registry_client_type = Mock(return_value=registry_client)
     monkeypatch.setattr(create_batch_deployment, "create_ml_client", lambda _: client)
@@ -1054,9 +1060,15 @@ def test_batch_environment_resolution_preserves_supported_non_registry_uri_forms
 def test_registry_environment_resolution_rejects_mismatched_service_id(monkeypatch):
     registry_client = Mock()
     registry_client.environments.get.return_value = SimpleNamespace(
-        id="/subscriptions/sub/resourceGroups/azureml/providers/"
+        id="/subscriptions/6c6683e9-e5fe-4038-8519-ce6ebec2ba15/"
+        "resourceGroups/registry-builtin-prod-eastus-01/providers/"
         "Microsoft.MachineLearningServices/registries/azureml/environments/"
         "sklearn-1.5/versions/52"
+    )
+    registry_client.environments._operation_scope = SimpleNamespace(
+        subscription_id="6c6683e9-e5fe-4038-8519-ce6ebec2ba15",
+        resource_group_name="registry-builtin-prod-eastus-01",
+        registry_name="azureml",
     )
     monkeypatch.setattr(
         create_batch_deployment,
@@ -1064,7 +1076,94 @@ def test_registry_environment_resolution_rejects_mismatched_service_id(monkeypat
         Mock(return_value=registry_client),
     )
 
-    with pytest.raises(RuntimeError, match="invalid or mismatched resource ID"):
+    with pytest.raises(RuntimeError, match="missing or mismatched ID"):
+        create_batch_deployment.resolve_batch_environment(
+            Mock(),
+            create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+        )
+
+
+@pytest.mark.parametrize(
+    ("scope", "message"),
+    [
+        (
+            SimpleNamespace(
+                subscription_id=None,
+                resource_group_name="registry-builtin-prod-eastus-01",
+                registry_name="azureml",
+            ),
+            "subscription ID",
+        ),
+        (
+            SimpleNamespace(
+                subscription_id="not-a-subscription",
+                resource_group_name="registry-builtin-prod-eastus-01",
+                registry_name="azureml",
+            ),
+            "subscription ID",
+        ),
+        (
+            SimpleNamespace(
+                subscription_id="6c6683e9-e5fe-4038-8519-ce6ebec2ba15",
+                resource_group_name="../unsafe",
+                registry_name="azureml",
+            ),
+            "unsafe resource group",
+        ),
+        (
+            SimpleNamespace(
+                subscription_id="6c6683e9-e5fe-4038-8519-ce6ebec2ba15",
+                resource_group_name="registry-builtin-prod-eastus-01",
+                registry_name="other",
+            ),
+            "did not match the requested registry",
+        ),
+    ],
+)
+def test_registry_environment_resolution_rejects_invalid_operation_scope(
+    monkeypatch,
+    scope,
+    message,
+):
+    registry_client = Mock()
+    registry_client.environments.get.return_value = SimpleNamespace(
+        id=create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT
+    )
+    registry_client.environments._operation_scope = scope
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "create_registry_ml_client",
+        Mock(return_value=registry_client),
+    )
+
+    with pytest.raises(RuntimeError, match=message):
+        create_batch_deployment.resolve_batch_environment(
+            Mock(),
+            create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+        )
+
+
+def test_registry_environment_resolution_rejects_scope_conflicting_full_id(
+    monkeypatch,
+):
+    registry_client = Mock()
+    registry_client.environments.get.return_value = SimpleNamespace(
+        id="/subscriptions/11111111-1111-1111-1111-111111111111/"
+        "resourceGroups/other/providers/Microsoft.MachineLearningServices/"
+        "registries/azureml/environments/sklearn-1.5/versions/53"
+    )
+    registry_client.environments._operation_scope = SimpleNamespace(
+        subscription_id="6c6683e9-e5fe-4038-8519-ce6ebec2ba15",
+        resource_group_name="registry-builtin-prod-eastus-01",
+        registry_name="azureml",
+    )
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "create_registry_ml_client",
+        Mock(return_value=registry_client),
+    )
+
+    with pytest.raises(RuntimeError, match="conflicts with.*operation scope"):
         create_batch_deployment.resolve_batch_environment(
             Mock(),
             create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
