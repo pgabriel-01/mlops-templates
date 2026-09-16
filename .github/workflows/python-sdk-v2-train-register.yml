@@ -31,6 +31,11 @@ on:
         required: false
         default: model
         type: string
+      model_type:
+        description: Model asset type; no-code deployments require mlflow_model.
+        required: false
+        default: mlflow_model
+        type: string
       python_version:
         required: false
         default: "3.11"
@@ -98,6 +103,7 @@ jobs:
           JOB_FILE: ${{ inputs.job_file }}
           MODEL_NAME: ${{ inputs.model_name }}
           MODEL_OUTPUT_NAME: ${{ inputs.model_output_name }}
+          MODEL_TYPE: ${{ inputs.model_type }}
         run: |
           python .mlops-python-sdk/src/python-sdk-v2/train_and_register_model.py \
             --subscription_id "$AZURE_SUBSCRIPTION_ID" \
@@ -105,4 +111,5 @@ jobs:
             --workspace_name "$WORKSPACE_NAME" \
             --job_file "$JOB_FILE" \
             --model_name "$MODEL_NAME" \
-            --model_output_name "$MODEL_OUTPUT_NAME"
+            --model_output_name "$MODEL_OUTPUT_NAME" \
+            --model_type "$MODEL_TYPE"

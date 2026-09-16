@@ -48,7 +48,10 @@ def test_create_ml_client_uses_explicit_coordinates_and_noninteractive_credentia
 
 def test_online_traffic_update_uses_online_endpoint_operation(monkeypatch):
     client = Mock()
-    client.models.get.return_value = SimpleNamespace(id="azureml:model:1")
+    client.models.get.return_value = SimpleNamespace(
+        id="azureml:model:1",
+        type="mlflow_model",
+    )
     client.online_deployments.begin_create_or_update.return_value.result.return_value = (
         Mock()
     )
@@ -80,6 +83,19 @@ def test_missing_registered_model_has_actionable_error():
 
     with pytest.raises(RuntimeError, match="training/model registration workflow"):
         aml_client.get_registered_model(client, "model", "7")
+
+
+def test_no_code_deployment_rejects_non_mlflow_model():
+    client = Mock()
+    client.models.get.return_value = SimpleNamespace(type="custom_model")
+
+    with pytest.raises(RuntimeError, match="require an MLflow model"):
+        aml_client.get_registered_model(
+            client,
+            "model",
+            "7",
+            require_mlflow=True,
+        )
 
 
 def test_batch_invoke_waits_for_terminal_success(monkeypatch):
@@ -137,7 +153,7 @@ def test_training_waits_then_registers_job_output(monkeypatch):
         job_file="jobs/train.yml",
         model_name="forecast",
         model_output_name="model",
-        model_type="custom_model",
+        model_type="mlflow_model",
     )
 
     train_and_register_model.run(args)
@@ -145,6 +161,7 @@ def test_training_waits_then_registers_job_output(monkeypatch):
     registered = client.models.create_or_update.call_args.args[0]
     assert registered.name == "forecast"
     assert registered.path == "azureml://jobs/training-job/outputs/model/paths/"
+    assert registered.type == "mlflow_model"
 
 
 def test_training_writes_reusable_workflow_outputs(monkeypatch, tmp_path):
@@ -167,7 +184,7 @@ def test_training_writes_reusable_workflow_outputs(monkeypatch, tmp_path):
         job_file="jobs/train.yml",
         model_name="forecast",
         model_output_name="model",
-        model_type="custom_model",
+        model_type="mlflow_model",
     )
 
     train_and_register_model.run(args)

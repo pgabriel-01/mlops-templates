@@ -26,7 +26,8 @@ jobs:
 ```
 
 The training workflow outputs `training_job_name`, `model_name`, and
-`model_version`. The online workflow requires `endpoint_name`,
+`model_version`. Its `model_output_name` defaults to `model` and its
+`model_type` defaults to `mlflow_model`. The online workflow requires `endpoint_name`,
 `deployment_name`, `model_name`, `model_version`, and `request_file`, and outputs
 the endpoint and deployment names. The batch workflow requires those endpoint
 and model inputs plus `compute`, `request_batch_file`, and optionally
@@ -36,6 +37,8 @@ an optional `runner` label (default `ubuntu-24.04`).
 Both deployment workflows create or update resources idempotently, wait for
 long-running operations, and test the deployment. Batch invocation waits for a
 terminal job state and fails the workflow with parent and child-job diagnostics.
+The deployment workflows intentionally use Azure ML's MLflow no-code deployment
+path and fail with an actionable error if the referenced model is not MLflow.
 
 Promote to `test` or `prod` by calling the same reusable workflow with a
 different GitHub Environment and environment-scoped OIDC secrets and variables.

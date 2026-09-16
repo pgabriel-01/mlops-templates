@@ -85,12 +85,20 @@ def get_registered_model(
     ml_client: MLClient,
     model_name: str,
     model_version: str,
+    require_mlflow: bool = False,
 ) -> Any:
     try:
-        return ml_client.models.get(name=model_name, version=model_version)
+        model = ml_client.models.get(name=model_name, version=model_version)
     except Exception as exc:
         raise RuntimeError(
             "Registered model "
             f"'{model_name}:{model_version}' was not found. Run the training/model "
             "registration workflow first or provide an existing model name and version."
         ) from exc
+    if require_mlflow and str(model.type).lower() != "mlflow_model":
+        raise RuntimeError(
+            f"Registered model '{model_name}:{model_version}' has type "
+            f"'{model.type}'. The reusable no-code deployment workflows require an "
+            "MLflow model; register it with model_type=mlflow_model."
+        )
+    return model

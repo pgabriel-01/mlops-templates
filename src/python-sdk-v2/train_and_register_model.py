@@ -22,7 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--job_file", required=True)
     parser.add_argument("--model_name", required=True)
     parser.add_argument("--model_output_name", default="model")
-    parser.add_argument("--model_type", default="custom_model")
+    parser.add_argument("--model_type", default="mlflow_model")
     return parser.parse_args()
 
 

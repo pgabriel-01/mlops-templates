@@ -34,6 +34,7 @@ def run(args: argparse.Namespace):
         ml_client,
         args.model_name,
         args.model_version,
+        require_mlflow=True,
     )
     deployment = ManagedOnlineDeployment(
         name=args.deployment_name,
