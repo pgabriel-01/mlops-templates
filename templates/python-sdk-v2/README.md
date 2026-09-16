@@ -43,9 +43,10 @@ workspaces that enforce `allowSharedKeyAccess=false`.
 The online workflow targets an Azure ML **Kubernetes online endpoint**, not a
 managed online endpoint. Its required serving inputs are:
 
-- `compute`: an existing Azure ML Kubernetes compute backed by either a direct
-  AKS `Microsoft.ContainerService/managedClusters` resource or an Azure
-  Arc-enabled `Microsoft.Kubernetes/connectedClusters` resource
+- `compute`: preferably an existing direct private AKS
+  `Microsoft.ContainerService/managedClusters` compute attachment; an Azure
+  Arc-enabled `Microsoft.Kubernetes/connectedClusters` attachment is the
+  fallback
 - `environment_name` and `environment_version`: an existing, versioned Azure ML
   environment whose only runtime source is a prebuilt image pinned by
   `@sha256:<digest>`
