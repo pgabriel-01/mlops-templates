@@ -17,6 +17,14 @@ anonymous image build.
   reference. The default remains
   `azureml://registries/azureml/environments/sklearn-1.5/versions/53`.
 
+For a registry URI, the deployment script creates a registry-scoped `MLClient`
+with the same authenticated credential used by the workspace client, fetches
+the exact environment name and numeric version, validates the returned resource
+ID, and passes that full ARM ID to `BatchDeployment`. It never submits the
+`azureml://registries/...` shorthand as `ModelConfiguration.EnvironmentId`.
+Workspace `azureml:<name>:<version>` references and full workspace or registry
+environment resource IDs remain supported without rewriting.
+
 Both scoring paths must exist after the consumer checkout. Absolute paths,
 `..` traversal, symlink escapes, and missing files are rejected before an
 Azure ML client is created.

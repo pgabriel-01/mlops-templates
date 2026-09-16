@@ -132,6 +132,22 @@ def create_ml_client(args: argparse.Namespace) -> MLClient:
     )
 
 
+def create_registry_ml_client(
+    workspace_client: MLClient,
+    registry_name: str,
+) -> MLClient:
+    credential = getattr(workspace_client, "_credential", None)
+    if credential is None:
+        raise RuntimeError(
+            "The workspace Azure ML client does not expose its credential; "
+            "cannot create a registry-scoped client with the same identity."
+        )
+    return MLClient(
+        credential=credential,
+        registry_name=registry_name,
+    )
+
+
 @contextmanager
 def use_private_ca_bundle(ca_bundle: str) -> Iterator[Path]:
     if not ca_bundle or not ca_bundle.strip():

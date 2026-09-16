@@ -11,6 +11,7 @@ from azure.ai.ml.entities import BatchDeployment, CodeConfiguration
 from aml_client import (
     add_workspace_arguments,
     create_ml_client,
+    create_registry_ml_client,
     get_registered_model,
     wait_for_resource_create_or_update,
 )
@@ -29,6 +30,16 @@ IMMUTABLE_ENVIRONMENT_PATTERNS = (
         r"environments/[^/\s]+/versions/\d+",
         re.IGNORECASE,
     ),
+)
+REGISTRY_ENVIRONMENT_PATTERN = re.compile(
+    r"azureml://registries/([^/\s]+)/environments/([^/\s]+)/versions/(\d+)",
+    re.IGNORECASE,
+)
+FULL_ENVIRONMENT_ID_PATTERN = re.compile(
+    r"/subscriptions/[^/\s]+/resourceGroups/[^/\s]+/providers/"
+    r"Microsoft\.MachineLearningServices/(?:workspaces|registries)/[^/\s]+/"
+    r"environments/[^/\s]+/versions/\d+",
+    re.IGNORECASE,
 )
 
 
@@ -51,6 +62,35 @@ def validate_immutable_environment_reference(reference: str) -> str:
             "allowed."
         )
     return normalized_reference
+
+
+def resolve_batch_environment(ml_client: object, reference: str) -> str:
+    registry_match = REGISTRY_ENVIRONMENT_PATTERN.fullmatch(reference)
+    if not registry_match:
+        return reference
+
+    registry_name, environment_name, version = registry_match.groups()
+    registry_client = create_registry_ml_client(ml_client, registry_name)
+    try:
+        environment = registry_client.environments.get(
+            name=environment_name,
+            version=version,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Immutable registry environment "
+            f"'{registry_name}/{environment_name}:{version}' was not found."
+        ) from exc
+
+    resolved_id = str(getattr(environment, "id", "") or "")
+    if not FULL_ENVIRONMENT_ID_PATTERN.fullmatch(resolved_id) or not (
+        _environment_matches(reference, resolved_id)
+    ):
+        raise RuntimeError(
+            "Azure ML returned an invalid or mismatched resource ID for immutable "
+            f"registry environment '{reference}'. resolved={resolved_id!r}"
+        )
+    return resolved_id
 
 
 def resolve_scoring_code(
@@ -115,11 +155,7 @@ def _environment_matches(requested: str, actual: str) -> bool:
     if requested_value.lower() == actual_value.lower():
         return True
 
-    registry_match = re.fullmatch(
-        r"azureml://registries/([^/\s]+)/environments/([^/\s]+)/versions/(\d+)",
-        requested_value,
-        re.IGNORECASE,
-    )
+    registry_match = REGISTRY_ENVIRONMENT_PATTERN.fullmatch(requested_value)
     if registry_match:
         registry_name, environment_name, version = registry_match.groups()
         expected_suffix = (
@@ -216,7 +252,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def run(args: argparse.Namespace):
-    environment = validate_immutable_environment_reference(args.environment)
+    requested_environment = validate_immutable_environment_reference(args.environment)
     code_directory, scoring_script = resolve_scoring_code(
         args.repository_root,
         args.scoring_code_directory,
@@ -229,6 +265,7 @@ def run(args: argparse.Namespace):
         args.model_version,
         require_mlflow=True,
     )
+    environment = resolve_batch_environment(ml_client, requested_environment)
     code_configuration = CodeConfiguration(
         code=str(code_directory),
         scoring_script=scoring_script,
@@ -257,7 +294,7 @@ def run(args: argparse.Namespace):
     )
     verify_live_deployment(
         live_deployment,
-        environment,
+        requested_environment,
         scoring_script,
     )
 

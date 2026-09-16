@@ -23,8 +23,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--endpoint_name", required=True)
     parser.add_argument("--model_name", required=True)
     parser.add_argument("--model_version", required=True)
-    parser.add_argument("--environment_name", required=True)
-    parser.add_argument("--environment_version", required=True)
+    parser.add_argument("--environment_name")
+    parser.add_argument("--environment_version")
+    parser.add_argument("--mlflow_no_code", action="store_true")
     parser.add_argument("--instance_type", required=True)
     parser.add_argument("--instance_count", type=int, default=1)
     parser.add_argument("--traffic_allocation", type=int, default=100)
@@ -32,6 +33,21 @@ def parse_args() -> argparse.Namespace:
 
 
 def run(args: argparse.Namespace):
+    mlflow_no_code = bool(getattr(args, "mlflow_no_code", False))
+    environment_name = getattr(args, "environment_name", None)
+    environment_version = getattr(args, "environment_version", None)
+    if mlflow_no_code and (environment_name or environment_version):
+        raise argparse.ArgumentTypeError(
+            "--mlflow_no_code cannot be combined with --environment_name or "
+            "--environment_version. Azure ML supplies the curated inference "
+            "environment for MLflow no-code deployment."
+        )
+    if not mlflow_no_code and (not environment_name or not environment_version):
+        raise argparse.ArgumentTypeError(
+            "--environment_name and --environment_version are required unless "
+            "--mlflow_no_code is enabled."
+        )
+
     ml_client = create_ml_client(args)
     model = get_registered_model(
         ml_client,
@@ -39,19 +55,21 @@ def run(args: argparse.Namespace):
         args.model_version,
         require_mlflow=True,
     )
-    environment = get_prebuilt_environment(
-        ml_client,
-        args.environment_name,
-        args.environment_version,
-    )
-    deployment = KubernetesOnlineDeployment(
+    deployment_args = dict(
         name=args.deployment_name,
         endpoint_name=args.endpoint_name,
         model=model.id,
-        environment=environment.id,
         instance_type=args.instance_type,
         instance_count=args.instance_count,
     )
+    if not mlflow_no_code:
+        environment = get_prebuilt_environment(
+            ml_client,
+            environment_name,
+            environment_version,
+        )
+        deployment_args["environment"] = environment.id
+    deployment = KubernetesOnlineDeployment(**deployment_args)
     wait_for_resource_create_or_update(
         lambda: ml_client.online_deployments.begin_create_or_update(deployment),
         lambda: ml_client.online_deployments.get(

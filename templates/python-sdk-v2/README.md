@@ -38,18 +38,30 @@ endpoint and model inputs plus `compute`, `request_batch_file`, and optionally
 only with another versioned Azure ML environment reference. Supplying an
 explicit prebuilt environment prevents Azure ML from generating an anonymous
 Conda environment and workspace image build, which is incompatible with
-workspaces that enforce `allowSharedKeyAccess=false`.
+workspaces that enforce `allowSharedKeyAccess=false`. Registry shorthand is
+resolved with a registry-scoped SDK client using the same OIDC-backed
+credential; the exact numeric version's full ARM resource ID is passed to the
+batch deployment so the service never receives registry shorthand in
+`ModelConfiguration.EnvironmentId`.
 
 The online workflow targets an Azure ML **Kubernetes online endpoint**, not a
-managed online endpoint. Its required serving inputs are:
+managed online endpoint. It supports two explicit deployment modes:
+
+- The default image-only mode requires `environment_name` and
+  `environment_version` for an existing Azure ML environment whose only runtime
+  source is a prebuilt image pinned by `@sha256:<digest>`.
+- Set `mlflow_no_code: true` to use Azure ML's supported MLflow online no-code
+  deployment. In this mode, omit both environment inputs. The deployment omits
+  the environment and scoring code configuration so Azure ML supplies its
+  curated inference base and installs the dependencies declared by the
+  registered MLflow model at container runtime.
+
+The shared required serving inputs are:
 
 - `compute`: preferably an existing direct private AKS
   `Microsoft.ContainerService/managedClusters` compute attachment; an Azure
   Arc-enabled `Microsoft.Kubernetes/connectedClusters` attachment is the
   fallback
-- `environment_name` and `environment_version`: an existing, versioned Azure ML
-  environment whose only runtime source is a prebuilt image pinned by
-  `@sha256:<digest>`
 - `instance_type`: an Azure ML Kubernetes instance type defined by the cluster
   administrator
 - `runner`: the private ARC runner label with network access to the private
@@ -60,14 +72,18 @@ managed online endpoint. Its required serving inputs are:
 - `endpoint_name`, `deployment_name`, `model_name`, `model_version`, and
   `request_file`
 
-`instance_count`, `traffic_allocation`, and `endpoint_uami_resource_id` remain
-optional. When supplied, `endpoint_uami_resource_id` must be the full resource
-ID of a user-assigned managed identity; system-assigned and AKS node identity
-fallbacks are rejected. The pinned SDK supports an explicit identity on
-`KubernetesOnlineEndpoint`. When this optional input is omitted, the workflow
-does not force an endpoint identity: the required UAMI on the attached Azure ML
-Kubernetes compute remains the serving identity used for image pulls and Azure
-resource access. The workflow outputs the endpoint and deployment names.
+`environment_name`, `environment_version`, `mlflow_no_code`, `instance_count`,
+`traffic_allocation`, and `endpoint_uami_resource_id` are optional workflow
+inputs. The environment pair is conditionally required when `mlflow_no_code`
+is false, and supplying either environment input in no-code mode fails before
+Azure access. When supplied, `endpoint_uami_resource_id` must be the full
+resource ID of a user-assigned managed identity; system-assigned and AKS node
+identity fallbacks are rejected. The pinned SDK supports an explicit identity
+on `KubernetesOnlineEndpoint`. When this optional input is omitted, the
+workflow does not force an endpoint identity: the required UAMI on the attached
+Azure ML Kubernetes compute remains the serving identity used for image pulls
+and Azure resource access. The workflow outputs the endpoint and deployment
+names.
 
 The online compute is an infrastructure prerequisite and is validated before
 endpoint creation. It must be in `Succeeded` state, use a dedicated non-default
@@ -107,11 +123,14 @@ locally; `AZUREML_CREDENTIAL_MODE=default` is rejected in CI.
 Both deployment workflows create or update resources idempotently, wait for
 long-running operations, and test the deployment. Batch invocation waits for a
 terminal job state and fails the workflow with parent and child-job diagnostics.
-The deployment workflows intentionally use Azure ML's MLflow no-code deployment
-path and fail with an actionable error if the referenced model is not MLflow.
-For online serving, the explicit registered environment prevents Azure ML from
-creating an anonymous environment or starting a workspace image build. This is
-required when workspace storage enforces `allowSharedKeyAccess=false`.
+The deployment workflows require an MLflow model and fail with an actionable
+error for any other registered model type. For online serving, choose either
+the supported Azure ML no-code mode or the default explicit registered
+environment. The default prevents Azure ML from creating an anonymous
+environment or starting a workspace image build and is required when workspace
+storage enforces `allowSharedKeyAccess=false`. The no-code mode does not run an
+in-cluster image builder or require root, privileged pods, Linux capabilities,
+a Docker socket, or mutable runtime installation by the workflow.
 Batch deployment rejects mutable labels, `latest`, unversioned references,
 images, and inline Conda environments before any Azure ML operation.
 
@@ -135,8 +154,7 @@ jobs:
       model_name: ${{ needs.train.outputs.model_name }}
       model_version: ${{ needs.train.outputs.model_version }}
       compute: ${{ vars.ONLINE_COMPUTE }}
-      environment_name: ${{ vars.ONLINE_ENVIRONMENT_NAME }}
-      environment_version: ${{ vars.ONLINE_ENVIRONMENT_VERSION }}
+      mlflow_no_code: true
       instance_type: ${{ vars.ONLINE_INSTANCE_TYPE }}
       instance_count: 1
       request_file: samples/online-request.json
@@ -149,14 +167,14 @@ jobs:
       AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 ```
 
-The coordinated infrastructure configuration keys are `online_compute`,
-`online_environment_name`, `online_environment_version`,
-`online_instance_type`, and `online_tls_ca_secret_id`, with
-`online_endpoint_uami_resource_id` optional. Map them to the uppercase
-repository/environment variables shown above. Remove any managed-online VM SKU
-such as `Standard_DS2_v2`; Kubernetes `instance_type` is a cluster-defined
-resource profile. Keep the private ARC runner and existing OIDC secrets
-unchanged.
+The coordinated infrastructure configuration keys for no-code mode are
+`online_compute`, `online_instance_type`, and `online_tls_ca_secret_id`, with
+`online_endpoint_uami_resource_id` optional. Default image-only mode additionally
+uses `online_environment_name` and `online_environment_version`. Map them to the
+uppercase repository/environment variables shown above. Remove any
+managed-online VM SKU such as `Standard_DS2_v2`; Kubernetes `instance_type` is a
+cluster-defined resource profile. Keep the private ARC runner and existing OIDC
+secrets unchanged.
 
 Promote to `test` or `prod` by calling the same reusable workflow with a
 different GitHub Environment and environment-scoped OIDC secrets and variables.

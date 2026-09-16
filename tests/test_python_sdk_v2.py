@@ -14,6 +14,11 @@ from azure.core.exceptions import ResourceExistsError
 
 SDK_PATH = Path(__file__).parents[1] / "src" / "python-sdk-v2"
 sys.path.insert(0, str(SDK_PATH))
+TEST_BATCH_ENVIRONMENT_ID = (
+    "/subscriptions/sub/resourceGroups/azureml/providers/"
+    "Microsoft.MachineLearningServices/registries/azureml/environments/"
+    "sklearn-1.5/versions/53"
+)
 
 aml_client = importlib.import_module("aml_client")
 create_batch_deployment = importlib.import_module("create_batch_deployment")
@@ -77,6 +82,24 @@ def test_local_mode_uses_default_credential_without_managed_identity(monkeypatch
     )
     credential.get_token.assert_called_once_with(
         "https://management.azure.com/.default"
+    )
+
+
+def test_registry_client_reuses_workspace_client_credential(monkeypatch):
+    credential = Mock()
+    registry_client = Mock()
+    client_type = Mock(return_value=registry_client)
+    monkeypatch.setattr(aml_client, "MLClient", client_type)
+
+    result = aml_client.create_registry_ml_client(
+        SimpleNamespace(_credential=credential),
+        "azureml",
+    )
+
+    assert result is registry_client
+    client_type.assert_called_once_with(
+        credential=credential,
+        registry_name="azureml",
     )
 
 
@@ -144,6 +167,7 @@ def test_online_workflow_requires_private_kubernetes_contract():
         "compute",
         "environment_name",
         "environment_version",
+        "mlflow_no_code",
         "instance_type",
         "instance_count",
         "tls_ca_key_vault_secret_id",
@@ -151,16 +175,24 @@ def test_online_workflow_requires_private_kubernetes_contract():
         assert required_input in inputs
     assert inputs["runner"]["required"] is True
     assert inputs["compute"]["required"] is True
-    assert inputs["environment_name"]["required"] is True
-    assert inputs["environment_version"]["required"] is True
+    assert inputs["environment_name"]["required"] is False
+    assert inputs["environment_name"]["default"] == ""
+    assert inputs["environment_version"]["required"] is False
+    assert inputs["environment_version"]["default"] == ""
+    assert inputs["mlflow_no_code"]["required"] is False
+    assert inputs["mlflow_no_code"]["default"] is False
     assert inputs["instance_type"]["required"] is True
     assert inputs["tls_ca_key_vault_secret_id"]["required"] is True
     assert inputs["endpoint_uami_resource_id"]["required"] is False
     assert "ubuntu-24.04" not in workflow
     assert "Standard_DS2_v2" not in workflow
     assert "--compute \"$COMPUTE\"" in workflow
-    assert "--environment_name \"$ENVIRONMENT_NAME\"" in workflow
-    assert "--environment_version \"$ENVIRONMENT_VERSION\"" in workflow
+    assert 'deployment_mode_args+=(--mlflow_no_code)' in workflow
+    assert 'deployment_mode_args+=(--environment_name "$ENVIRONMENT_NAME")' in workflow
+    assert (
+        'deployment_mode_args+=(--environment_version "$ENVIRONMENT_VERSION")'
+        in workflow
+    )
     assert "az keyvault secret show" in workflow
     assert "--id \"$TLS_CA_KEY_VAULT_SECRET_ID\"" in workflow
     assert (
@@ -551,6 +583,121 @@ def test_online_deployment_uses_kubernetes_and_exact_environment(monkeypatch):
     client.online_endpoints.begin_create_or_update.assert_called_once_with(endpoint)
 
 
+def test_online_mlflow_no_code_omits_environment_and_code_configuration(monkeypatch):
+    client = Mock()
+    client.models.get.return_value = SimpleNamespace(
+        id="azureml:model:1",
+        type="mlflow_model",
+    )
+    deployment_poller = Mock()
+    deployment_poller.result.return_value = SimpleNamespace(
+        provisioning_state="Succeeded"
+    )
+    client.online_deployments.begin_create_or_update.return_value = deployment_poller
+    client.online_deployments.get.return_value = SimpleNamespace(
+        provisioning_state="Succeeded"
+    )
+    endpoint = SimpleNamespace(traffic={}, provisioning_state="Succeeded")
+    client.online_endpoints.get.return_value = endpoint
+    endpoint_poller = Mock()
+    endpoint_poller.result.return_value = endpoint
+    client.online_endpoints.begin_create_or_update.return_value = endpoint_poller
+    deployment_type = Mock(return_value="kubernetes-deployment")
+    environment_lookup = Mock()
+    monkeypatch.setattr(create_online_deployment, "create_ml_client", lambda _: client)
+    monkeypatch.setattr(
+        create_online_deployment,
+        "KubernetesOnlineDeployment",
+        deployment_type,
+    )
+    monkeypatch.setattr(
+        create_online_deployment,
+        "get_prebuilt_environment",
+        environment_lookup,
+    )
+    args = _online_deployment_args()
+    args.mlflow_no_code = True
+    args.environment_name = None
+    args.environment_version = None
+
+    create_online_deployment.run(args)
+
+    deployment_kwargs = deployment_type.call_args.kwargs
+    assert "environment" not in deployment_kwargs
+    assert "code_configuration" not in deployment_kwargs
+    environment_lookup.assert_not_called()
+    client.models.get.assert_called_once_with(name="model", version="1")
+
+
+def test_online_mlflow_no_code_rejects_non_mlflow_model(monkeypatch):
+    client = Mock()
+    client.models.get.return_value = SimpleNamespace(
+        id="azureml:model:1",
+        type="custom_model",
+    )
+    monkeypatch.setattr(create_online_deployment, "create_ml_client", lambda _: client)
+    args = _online_deployment_args()
+    args.mlflow_no_code = True
+    args.environment_name = None
+    args.environment_version = None
+
+    with pytest.raises(RuntimeError, match="require an MLflow model"):
+        create_online_deployment.run(args)
+
+    client.online_deployments.begin_create_or_update.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("environment_name", "environment_version"),
+    [
+        ("inference", None),
+        (None, "7"),
+        ("inference", "7"),
+    ],
+)
+def test_online_mlflow_no_code_rejects_environment_conflicts_before_azure(
+    monkeypatch,
+    environment_name,
+    environment_version,
+):
+    create_client = Mock()
+    monkeypatch.setattr(create_online_deployment, "create_ml_client", create_client)
+    args = _online_deployment_args()
+    args.mlflow_no_code = True
+    args.environment_name = environment_name
+    args.environment_version = environment_version
+
+    with pytest.raises(argparse.ArgumentTypeError, match="cannot be combined"):
+        create_online_deployment.run(args)
+
+    create_client.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("environment_name", "environment_version"),
+    [
+        (None, None),
+        ("inference", None),
+        (None, "7"),
+    ],
+)
+def test_online_image_mode_requires_complete_environment_before_azure(
+    monkeypatch,
+    environment_name,
+    environment_version,
+):
+    create_client = Mock()
+    monkeypatch.setattr(create_online_deployment, "create_ml_client", create_client)
+    args = _online_deployment_args()
+    args.environment_name = environment_name
+    args.environment_version = environment_version
+
+    with pytest.raises(argparse.ArgumentTypeError, match="are required"):
+        create_online_deployment.run(args)
+
+    create_client.assert_not_called()
+
+
 def test_online_deployment_repeat_update_waits_before_traffic(monkeypatch):
     events = []
     client = Mock()
@@ -823,7 +970,17 @@ def test_batch_deployment_uses_explicit_immutable_environment(monkeypatch):
     client.batch_endpoints.begin_create_or_update.return_value = endpoint_poller
     batch_deployment_type = Mock(return_value=SimpleNamespace())
     code_configuration_type = Mock(return_value="code-configuration")
+    registry_client = Mock()
+    registry_client.environments.get.return_value = SimpleNamespace(
+        id=TEST_BATCH_ENVIRONMENT_ID
+    )
+    registry_client_type = Mock(return_value=registry_client)
     monkeypatch.setattr(create_batch_deployment, "create_ml_client", lambda _: client)
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "create_registry_ml_client",
+        registry_client_type,
+    )
     monkeypatch.setattr(
         create_batch_deployment,
         "BatchDeployment",
@@ -835,11 +992,17 @@ def test_batch_deployment_uses_explicit_immutable_environment(monkeypatch):
         code_configuration_type,
     )
 
-    create_batch_deployment.run(_batch_deployment_args())
+    args = _batch_deployment_args()
+    args.environment = create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT
+    create_batch_deployment.run(args)
 
     assert (
         batch_deployment_type.call_args.kwargs["environment"]
-        == create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT
+        == TEST_BATCH_ENVIRONMENT_ID
+    )
+    assert (
+        batch_deployment_type.call_args.kwargs["environment"]
+        != create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT
     )
     assert "image" not in batch_deployment_type.call_args.kwargs
     assert (
@@ -852,6 +1015,76 @@ def test_batch_deployment_uses_explicit_immutable_environment(monkeypatch):
         ),
         scoring_script="score.py",
     )
+    registry_client_type.assert_called_once_with(client, "azureml")
+    registry_client.environments.get.assert_called_once_with(
+        name="sklearn-1.5",
+        version="53",
+    )
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "azureml:workspace-environment:7",
+        "/subscriptions/sub/resourceGroups/rg/providers/"
+        "Microsoft.MachineLearningServices/workspaces/ws/environments/"
+        "workspace-environment/versions/7",
+        "/subscriptions/sub/resourceGroups/rg/providers/"
+        "Microsoft.MachineLearningServices/registries/private/environments/"
+        "registry-environment/versions/9",
+    ],
+)
+def test_batch_environment_resolution_preserves_supported_non_registry_uri_forms(
+    monkeypatch,
+    reference,
+):
+    registry_client_type = Mock()
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "create_registry_ml_client",
+        registry_client_type,
+    )
+
+    assert create_batch_deployment.resolve_batch_environment(Mock(), reference) == (
+        reference
+    )
+    registry_client_type.assert_not_called()
+
+
+def test_registry_environment_resolution_rejects_mismatched_service_id(monkeypatch):
+    registry_client = Mock()
+    registry_client.environments.get.return_value = SimpleNamespace(
+        id="/subscriptions/sub/resourceGroups/azureml/providers/"
+        "Microsoft.MachineLearningServices/registries/azureml/environments/"
+        "sklearn-1.5/versions/52"
+    )
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "create_registry_ml_client",
+        Mock(return_value=registry_client),
+    )
+
+    with pytest.raises(RuntimeError, match="invalid or mismatched resource ID"):
+        create_batch_deployment.resolve_batch_environment(
+            Mock(),
+            create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+        )
+
+
+def test_resolved_registry_environment_serializes_as_full_arm_id():
+    deployment = create_batch_deployment.BatchDeployment(
+        name="batch-deployment",
+        endpoint_name="batch-endpoint",
+        environment=TEST_BATCH_ENVIRONMENT_ID,
+    )
+
+    rest_deployment = deployment._to_rest_object(location="eastus")
+    serialized_environment_id = rest_deployment.serialize()["properties"][
+        "environmentId"
+    ]
+
+    assert serialized_environment_id == TEST_BATCH_ENVIRONMENT_ID
+    assert not serialized_environment_id.startswith("azureml://")
 
 
 @pytest.mark.parametrize(
@@ -1151,6 +1384,7 @@ def _online_deployment_args():
         model_version="1",
         environment_name="inference",
         environment_version="7",
+        mlflow_no_code=False,
         instance_type="cpu-small",
         instance_count=2,
         traffic_allocation=100,
@@ -1165,7 +1399,7 @@ def _batch_deployment_args():
         model_name="model",
         model_version="1",
         compute="batch-compute",
-        environment=create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+        environment=TEST_BATCH_ENVIRONMENT_ID,
         repository_root=str(Path(__file__).parents[1]),
         scoring_code_directory="tests/fixtures/batch_scoring",
         scoring_script="score.py",
@@ -1179,7 +1413,7 @@ def _batch_deployment_args():
 def _live_batch_deployment():
     return SimpleNamespace(
         provisioning_state="Succeeded",
-        environment=create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+        environment=TEST_BATCH_ENVIRONMENT_ID,
         code_configuration=SimpleNamespace(
             code="azureml:batch-scoring-code:1",
             scoring_script="score.py",
