@@ -10,7 +10,7 @@ from aml_client import (
     add_workspace_arguments,
     create_ml_client,
     get_registered_model,
-    wait_for_poller,
+    wait_for_resource_create_or_update,
 )
 
 
@@ -52,14 +52,21 @@ def run(args: argparse.Namespace):
         output_action=BatchDeploymentOutputAction.APPEND_ROW,
         output_file_name=args.output_file_name,
     )
-    wait_for_poller(
-        ml_client.batch_deployments.begin_create_or_update(deployment)
+    wait_for_resource_create_or_update(
+        lambda: ml_client.batch_deployments.begin_create_or_update(deployment),
+        lambda: ml_client.batch_deployments.get(
+            args.deployment_name,
+            endpoint_name=args.endpoint_name,
+        ),
+        f"batch deployment {args.deployment_name}",
     )
 
     endpoint = ml_client.batch_endpoints.get(args.endpoint_name)
     endpoint.defaults.deployment_name = args.deployment_name
-    return wait_for_poller(
-        ml_client.batch_endpoints.begin_create_or_update(endpoint)
+    return wait_for_resource_create_or_update(
+        lambda: ml_client.batch_endpoints.begin_create_or_update(endpoint),
+        lambda: ml_client.batch_endpoints.get(args.endpoint_name),
+        f"batch endpoint {args.endpoint_name}",
     )
 
 
