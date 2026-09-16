@@ -1,4 +1,5 @@
 import argparse
+import ast
 import importlib
 import os
 import re
@@ -703,9 +704,7 @@ def test_batch_endpoint_poller_completes_before_deployment_begin(monkeypatch):
     client.batch_deployments.begin_create_or_update.side_effect = lambda _: (
         events.append("deployment-begin") or deployment_poller
     )
-    client.batch_deployments.get.return_value = SimpleNamespace(
-        provisioning_state="Succeeded"
-    )
+    client.batch_deployments.get.return_value = _live_batch_deployment()
     endpoint = SimpleNamespace(
         defaults=SimpleNamespace(deployment_name=None),
         provisioning_state="Succeeded",
@@ -733,9 +732,7 @@ def test_batch_deployment_poller_completes_before_invocation(monkeypatch):
         or SimpleNamespace(provisioning_state="Succeeded")
     )
     client.batch_deployments.begin_create_or_update.return_value = deployment_poller
-    client.batch_deployments.get.return_value = SimpleNamespace(
-        provisioning_state="Succeeded"
-    )
+    client.batch_deployments.get.return_value = _live_batch_deployment()
     endpoint = SimpleNamespace(
         defaults=SimpleNamespace(deployment_name=None),
         provisioning_state="Succeeded",
@@ -815,9 +812,7 @@ def test_batch_deployment_uses_explicit_immutable_environment(monkeypatch):
         provisioning_state="Succeeded"
     )
     client.batch_deployments.begin_create_or_update.return_value = deployment_poller
-    client.batch_deployments.get.return_value = SimpleNamespace(
-        provisioning_state="Succeeded"
-    )
+    client.batch_deployments.get.return_value = _live_batch_deployment()
     endpoint = SimpleNamespace(
         defaults=SimpleNamespace(deployment_name=None),
         provisioning_state="Succeeded",
@@ -827,11 +822,17 @@ def test_batch_deployment_uses_explicit_immutable_environment(monkeypatch):
     endpoint_poller.result.return_value = endpoint
     client.batch_endpoints.begin_create_or_update.return_value = endpoint_poller
     batch_deployment_type = Mock(return_value=SimpleNamespace())
+    code_configuration_type = Mock(return_value="code-configuration")
     monkeypatch.setattr(create_batch_deployment, "create_ml_client", lambda _: client)
     monkeypatch.setattr(
         create_batch_deployment,
         "BatchDeployment",
         batch_deployment_type,
+    )
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "CodeConfiguration",
+        code_configuration_type,
     )
 
     create_batch_deployment.run(_batch_deployment_args())
@@ -841,7 +842,16 @@ def test_batch_deployment_uses_explicit_immutable_environment(monkeypatch):
         == create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT
     )
     assert "image" not in batch_deployment_type.call_args.kwargs
-    assert "code_configuration" not in batch_deployment_type.call_args.kwargs
+    assert (
+        batch_deployment_type.call_args.kwargs["code_configuration"]
+        == "code-configuration"
+    )
+    code_configuration_type.assert_called_once_with(
+        code=str(
+            Path(__file__).parents[1] / "tests" / "fixtures" / "batch_scoring"
+        ),
+        scoring_script="score.py",
+    )
 
 
 @pytest.mark.parametrize(
@@ -873,20 +883,62 @@ def test_batch_deployment_rejects_mutable_environment_reference(
     create_client.assert_not_called()
 
 
-def test_batch_workflow_uses_pinned_curated_environment():
+def test_batch_workflow_passes_explicit_scoring_configuration():
     workflow = (
         Path(__file__).parents[1]
         / ".github"
         / "workflows"
         / "python-sdk-v2-batch.yml"
-    ).read_text(encoding="utf-8")
+    )
+    workflow_text = workflow.read_text(encoding="utf-8")
+    parsed = yaml.safe_load(workflow_text)
+    inputs = parsed[True]["workflow_call"]["inputs"]
 
     assert (
         "default: "
         "azureml://registries/azureml/environments/sklearn-1.5/versions/53"
-    ) in workflow
-    assert "DEPLOYMENT_ENVIRONMENT: ${{ inputs.deployment_environment }}" in workflow
-    assert '--environment "$DEPLOYMENT_ENVIRONMENT"' in workflow
+    ) in workflow_text
+    assert inputs["scoring_code_directory"]["required"] is True
+    assert inputs["scoring_script"]["required"] is True
+    assert (
+        "DEPLOYMENT_ENVIRONMENT: ${{ inputs.deployment_environment }}"
+        in workflow_text
+    )
+    assert "SCORING_CODE_DIRECTORY: ${{ inputs.scoring_code_directory }}" in workflow_text
+    assert "SCORING_SCRIPT: ${{ inputs.scoring_script }}" in workflow_text
+    assert '--environment "$DEPLOYMENT_ENVIRONMENT"' in workflow_text
+    assert '--repository_root "$GITHUB_WORKSPACE"' in workflow_text
+    assert '--scoring_code_directory "$SCORING_CODE_DIRECTORY"' in workflow_text
+    assert '--scoring_script "$SCORING_SCRIPT"' in workflow_text
+    action_refs = re.findall(r"uses:\s+\S+@(\S+)", workflow_text)
+    assert action_refs
+    assert all(re.fullmatch(r"[0-9a-f]{40}", ref) for ref in action_refs)
+
+
+def test_batch_scoring_example_defines_supported_mlflow_contract():
+    scoring_source = (
+        Path(__file__).parents[1]
+        / "examples"
+        / "python-sdk-v2"
+        / "batch-scoring"
+        / "score.py"
+    )
+    tree = ast.parse(scoring_source.read_text(encoding="utf-8"))
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+    }
+
+    assert scoring_source.is_file()
+    assert set(functions) >= {"init", "run"}
+    assert [argument.arg for argument in functions["run"].args.args] == ["mini_batch"]
+    source = scoring_source.read_text(encoding="utf-8")
+    assert "AZUREML_MODEL_DIR" in source
+    assert "mlflow.pyfunc.load_model" in source
+    assert "pd.read_parquet" in source
+    assert "pd.read_csv" in source
+    assert "return result" in source
 
 
 def test_batch_cli_defaults_to_immutable_prebuilt_environment(monkeypatch):
@@ -911,12 +963,148 @@ def test_batch_cli_defaults_to_immutable_prebuilt_environment(monkeypatch):
             "1",
             "--compute",
             "batch-compute",
+            "--repository_root",
+            str(Path(__file__).parents[1]),
+            "--scoring_code_directory",
+            "tests/fixtures/batch_scoring",
+            "--scoring_script",
+            "score.py",
         ],
     )
 
     args = create_batch_deployment.parse_args()
 
     assert args.environment == create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT
+
+
+@pytest.mark.parametrize(
+    ("code_directory", "scoring_script", "message"),
+    [
+        ("../batch_scoring", "score.py", "traversal-free"),
+        ("tests/fixtures/batch_scoring", "../score.py", "traversal-free"),
+        (".mlops-python-sdk/scoring", "score.py", "consumer repository"),
+        ("tests/fixtures/missing", "score.py", "does not exist"),
+        ("tests/fixtures/batch_scoring", "missing.py", "does not exist"),
+    ],
+)
+def test_batch_deployment_rejects_invalid_scoring_paths(
+    monkeypatch,
+    code_directory,
+    scoring_script,
+    message,
+):
+    create_client = Mock()
+    monkeypatch.setattr(create_batch_deployment, "create_ml_client", create_client)
+    args = _batch_deployment_args()
+    args.scoring_code_directory = code_directory
+    args.scoring_script = scoring_script
+
+    with pytest.raises(ValueError, match=message):
+        create_batch_deployment.run(args)
+
+    create_client.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("live_deployment", "message"),
+    [
+        (
+            SimpleNamespace(
+                environment=None,
+                code_configuration=SimpleNamespace(
+                    code="azureml:code:1",
+                    scoring_script="score.py",
+                ),
+            ),
+            "did not persist the requested immutable environment",
+        ),
+        (
+            SimpleNamespace(
+                environment=create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+                code_configuration=None,
+            ),
+            "did not persist a code configuration",
+        ),
+        (
+            SimpleNamespace(
+                environment="azureml://registries/azureml/environments/"
+                "sklearn-1.5/versions/52",
+                code_configuration=SimpleNamespace(
+                    code="azureml:code:1",
+                    scoring_script="score.py",
+                ),
+            ),
+            "did not persist the requested immutable environment",
+        ),
+        (
+            SimpleNamespace(
+                environment=create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+                code_configuration=SimpleNamespace(
+                    code="azureml:code:1",
+                    scoring_script="other.py",
+                ),
+            ),
+            "persisted an unexpected scoring script",
+        ),
+    ],
+)
+def test_batch_deployment_rejects_null_or_mismatched_live_configuration(
+    live_deployment,
+    message,
+):
+    with pytest.raises(RuntimeError, match=message):
+        create_batch_deployment.verify_live_deployment(
+            live_deployment,
+            create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+            "score.py",
+        )
+
+
+def test_batch_deployment_repeat_update_waits_then_verifies_before_defaulting(
+    monkeypatch,
+):
+    events = []
+    client = Mock()
+    client.models.get.return_value = SimpleNamespace(
+        id="azureml:model:1",
+        type="mlflow_model",
+    )
+    successful_deployment_poller = Mock()
+    successful_deployment_poller.result.side_effect = lambda: events.append(
+        "deployment-result"
+    )
+    client.batch_deployments.begin_create_or_update.side_effect = [
+        ResourceExistsError("operation already in progress"),
+        successful_deployment_poller,
+    ]
+    client.batch_deployments.get.side_effect = [
+        SimpleNamespace(provisioning_state="Updating"),
+        _live_batch_deployment(),
+        _live_batch_deployment(),
+    ]
+    endpoint = SimpleNamespace(
+        defaults=SimpleNamespace(deployment_name=None),
+        provisioning_state="Succeeded",
+    )
+    client.batch_endpoints.get.return_value = endpoint
+    endpoint_poller = Mock()
+    endpoint_poller.result.side_effect = lambda: events.append("endpoint-result")
+    client.batch_endpoints.begin_create_or_update.side_effect = lambda _: (
+        events.append("endpoint-begin") or endpoint_poller
+    )
+    monkeypatch.setattr(create_batch_deployment, "create_ml_client", lambda _: client)
+    monkeypatch.setattr(aml_client.time, "sleep", lambda _: events.append("state-check"))
+
+    create_batch_deployment.run(_batch_deployment_args())
+
+    assert client.batch_deployments.begin_create_or_update.call_count == 2
+    assert endpoint.defaults.deployment_name == "batch-deployment"
+    assert events == [
+        "state-check",
+        "deployment-result",
+        "endpoint-begin",
+        "endpoint-result",
+    ]
 
 
 def _batch_endpoint_args():
@@ -978,10 +1166,24 @@ def _batch_deployment_args():
         model_version="1",
         compute="batch-compute",
         environment=create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+        repository_root=str(Path(__file__).parents[1]),
+        scoring_code_directory="tests/fixtures/batch_scoring",
+        scoring_script="score.py",
         instance_count=1,
         max_concurrency_per_instance=1,
         mini_batch_size=10,
         output_file_name="predictions.csv",
+    )
+
+
+def _live_batch_deployment():
+    return SimpleNamespace(
+        provisioning_state="Succeeded",
+        environment=create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+        code_configuration=SimpleNamespace(
+            code="azureml:batch-scoring-code:1",
+            scoring_script="score.py",
+        ),
     )
 
 

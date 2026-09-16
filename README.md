@@ -2,6 +2,11 @@
 
 Welcome to the MLOps (v2) solution accelerator repository! This project is intended to serve as the starting point for MLOps implementation in Azure. The main repository from where you can start can be found in this [main README file](https://github.com/Azure/mlops-v2/blob/main/README.md)
 
+Reusable Python SDK v2 batch deployments require consumer-owned scoring code
+and an immutable Azure ML environment. See the
+[batch deployment contract](docs/python-sdk-v2-batch.md) for workflow inputs,
+path validation, and the required MLflow scoring signature.
+
 ## Contributing
 
 This project welcomes contributions and suggestions.  Most contributions require you to agree to a
