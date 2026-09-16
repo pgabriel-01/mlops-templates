@@ -6,11 +6,14 @@ from types import SimpleNamespace
 from unittest.mock import Mock, call
 
 import pytest
+from azure.core.exceptions import ResourceExistsError
 
 SDK_PATH = Path(__file__).parents[1] / "src" / "python-sdk-v2"
 sys.path.insert(0, str(SDK_PATH))
 
 aml_client = importlib.import_module("aml_client")
+create_batch_deployment = importlib.import_module("create_batch_deployment")
+create_batch_endpoint = importlib.import_module("create_batch_endpoint")
 create_online_deployment = importlib.import_module("create_online_deployment")
 test_batch_endpoint = importlib.import_module("test_batch_endpoint")
 train_and_register_model = importlib.import_module("train_and_register_model")
@@ -187,6 +190,164 @@ def test_batch_invoke_waits_for_terminal_success(monkeypatch):
     test_batch_endpoint.run(args)
 
     waiter.assert_called_once_with(client, "batch-job")
+
+
+def test_batch_endpoint_poller_completes_before_deployment_begin(monkeypatch):
+    events = []
+    client = Mock()
+    endpoint_poller = Mock()
+    endpoint_poller.result.side_effect = lambda: (
+        events.append("endpoint-result")
+        or SimpleNamespace(provisioning_state="Succeeded")
+    )
+    client.batch_endpoints.begin_create_or_update.side_effect = lambda _: (
+        events.append("endpoint-begin") or endpoint_poller
+    )
+    client.batch_endpoints.get.return_value = SimpleNamespace(
+        provisioning_state="Succeeded"
+    )
+    client.models.get.return_value = SimpleNamespace(
+        id="azureml:model:1",
+        type="mlflow_model",
+    )
+    deployment_poller = Mock()
+    deployment_poller.result.side_effect = lambda: (
+        events.append("deployment-result")
+        or SimpleNamespace(provisioning_state="Succeeded")
+    )
+    client.batch_deployments.begin_create_or_update.side_effect = lambda _: (
+        events.append("deployment-begin") or deployment_poller
+    )
+    client.batch_deployments.get.return_value = SimpleNamespace(
+        provisioning_state="Succeeded"
+    )
+    endpoint = SimpleNamespace(
+        defaults=SimpleNamespace(deployment_name=None),
+        provisioning_state="Succeeded",
+    )
+    client.batch_endpoints.get.return_value = endpoint
+    monkeypatch.setattr(create_batch_endpoint, "create_ml_client", lambda _: client)
+    monkeypatch.setattr(create_batch_deployment, "create_ml_client", lambda _: client)
+
+    create_batch_endpoint.run(_batch_endpoint_args())
+    create_batch_deployment.run(_batch_deployment_args())
+
+    assert events.index("endpoint-result") < events.index("deployment-begin")
+
+
+def test_batch_deployment_poller_completes_before_invocation(monkeypatch):
+    events = []
+    client = Mock()
+    client.models.get.return_value = SimpleNamespace(
+        id="azureml:model:1",
+        type="mlflow_model",
+    )
+    deployment_poller = Mock()
+    deployment_poller.result.side_effect = lambda: (
+        events.append("deployment-result")
+        or SimpleNamespace(provisioning_state="Succeeded")
+    )
+    client.batch_deployments.begin_create_or_update.return_value = deployment_poller
+    client.batch_deployments.get.return_value = SimpleNamespace(
+        provisioning_state="Succeeded"
+    )
+    endpoint = SimpleNamespace(
+        defaults=SimpleNamespace(deployment_name=None),
+        provisioning_state="Succeeded",
+    )
+    client.batch_endpoints.get.return_value = endpoint
+    endpoint_poller = Mock()
+    endpoint_poller.result.return_value = endpoint
+    client.batch_endpoints.begin_create_or_update.return_value = endpoint_poller
+    client.batch_endpoints.invoke.side_effect = lambda **_: (
+        events.append("invoke") or SimpleNamespace(name="batch-job")
+    )
+    monkeypatch.setattr(create_batch_deployment, "create_ml_client", lambda _: client)
+    monkeypatch.setattr(test_batch_endpoint, "create_ml_client", lambda _: client)
+    monkeypatch.setattr(
+        test_batch_endpoint,
+        "wait_for_job",
+        lambda *_: SimpleNamespace(status="Completed"),
+    )
+
+    create_batch_deployment.run(_batch_deployment_args())
+    test_batch_endpoint.run(_batch_invoke_args())
+
+    assert events.index("deployment-result") < events.index("invoke")
+
+
+def test_batch_endpoint_repeat_update_waits_then_retries(monkeypatch):
+    events = []
+    client = Mock()
+    successful_poller = Mock()
+    successful_poller.result.side_effect = lambda: (
+        events.append("update-result")
+        or SimpleNamespace(provisioning_state="Succeeded")
+    )
+    client.batch_endpoints.begin_create_or_update.side_effect = [
+        ResourceExistsError("operation already in progress"),
+        successful_poller,
+    ]
+    client.batch_endpoints.get.side_effect = [
+        SimpleNamespace(provisioning_state="Updating"),
+        SimpleNamespace(provisioning_state="Succeeded"),
+        SimpleNamespace(provisioning_state="Succeeded"),
+    ]
+    monkeypatch.setattr(create_batch_endpoint, "create_ml_client", lambda _: client)
+    monkeypatch.setattr(aml_client.time, "sleep", lambda _: events.append("state-check"))
+
+    result = create_batch_endpoint.run(_batch_endpoint_args())
+
+    assert result.provisioning_state == "Succeeded"
+    assert client.batch_endpoints.begin_create_or_update.call_count == 2
+    assert events == ["state-check", "update-result"]
+
+
+def test_batch_endpoint_terminal_operation_failure_propagates(monkeypatch):
+    client = Mock()
+    poller = Mock()
+    poller.result.return_value = SimpleNamespace(provisioning_state="Succeeded")
+    client.batch_endpoints.begin_create_or_update.return_value = poller
+    client.batch_endpoints.get.return_value = SimpleNamespace(
+        provisioning_state="Failed"
+    )
+    monkeypatch.setattr(create_batch_endpoint, "create_ml_client", lambda _: client)
+
+    with pytest.raises(RuntimeError, match="provisioning finished with state Failed"):
+        create_batch_endpoint.run(_batch_endpoint_args())
+
+    client.batch_endpoints.get.assert_called_once_with("batch-endpoint")
+
+
+def _batch_endpoint_args():
+    return argparse.Namespace(
+        endpoint_name="batch-endpoint",
+        description=None,
+        auth_mode="aad_token",
+    )
+
+
+def _batch_deployment_args():
+    return argparse.Namespace(
+        deployment_name="batch-deployment",
+        description=None,
+        endpoint_name="batch-endpoint",
+        model_name="model",
+        model_version="1",
+        compute="batch-compute",
+        instance_count=1,
+        max_concurrency_per_instance=1,
+        mini_batch_size=10,
+        output_file_name="predictions.csv",
+    )
+
+
+def _batch_invoke_args():
+    return argparse.Namespace(
+        endpoint_name="batch-endpoint",
+        request_batch_file="azureml://datastores/test/paths/input",
+        request_type="uri_folder",
+    )
 
 
 def test_failed_job_downloads_child_logs_and_surfaces_root_cause(

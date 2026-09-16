@@ -5,7 +5,11 @@ import argparse
 
 from azure.ai.ml.entities import BatchEndpoint
 
-from aml_client import add_workspace_arguments, create_ml_client, wait_for_poller
+from aml_client import (
+    add_workspace_arguments,
+    create_ml_client,
+    wait_for_resource_create_or_update,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -24,8 +28,10 @@ def run(args: argparse.Namespace):
         description=args.description,
         auth_mode=args.auth_mode,
     )
-    return wait_for_poller(
-        ml_client.batch_endpoints.begin_create_or_update(endpoint)
+    return wait_for_resource_create_or_update(
+        lambda: ml_client.batch_endpoints.begin_create_or_update(endpoint),
+        lambda: ml_client.batch_endpoints.get(args.endpoint_name),
+        f"batch endpoint {args.endpoint_name}",
     )
 
 

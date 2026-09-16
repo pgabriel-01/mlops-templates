@@ -6,9 +6,10 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from azure.ai.ml import MLClient
+from azure.core.exceptions import ResourceExistsError
 from azure.identity import AzureCliCredential, DefaultAzureCredential
 
 AZUREML_CREDENTIAL_MODE = "AZUREML_CREDENTIAL_MODE"
@@ -25,6 +26,11 @@ TERMINAL_JOB_STATUSES = {
     "NotResponding",
     "Paused",
 }
+SUCCESS_PROVISIONING_STATES = {"Succeeded"}
+FAILED_PROVISIONING_STATES = {"Failed", "Canceled", "Cancelled"}
+DEFAULT_RESOURCE_POLL_INTERVAL_SECONDS = 5
+DEFAULT_RESOURCE_MAX_POLLS = 120
+DEFAULT_RESOURCE_UPDATE_ATTEMPTS = 3
 DIAGNOSTICS_DIRECTORY = "aml-diagnostics"
 MAX_DIAGNOSTIC_FILES = 20
 MAX_DIAGNOSTIC_FILE_BYTES = 256_000
@@ -118,6 +124,90 @@ def create_ml_client(args: argparse.Namespace) -> MLClient:
 
 def wait_for_poller(poller: Any) -> Any:
     return poller.result()
+
+
+def wait_for_resource_create_or_update(
+    begin_create_or_update: Callable[[], Any],
+    get_resource: Callable[[], Any],
+    resource_description: str,
+    *,
+    poll_interval_seconds: int = DEFAULT_RESOURCE_POLL_INTERVAL_SECONDS,
+    max_state_polls: int = DEFAULT_RESOURCE_MAX_POLLS,
+    max_update_attempts: int = DEFAULT_RESOURCE_UPDATE_ATTEMPTS,
+) -> Any:
+    if max_state_polls < 1:
+        raise ValueError("max_state_polls must be at least 1")
+    if max_update_attempts < 1:
+        raise ValueError("max_update_attempts must be at least 1")
+
+    for attempt in range(1, max_update_attempts + 1):
+        try:
+            wait_for_poller(begin_create_or_update())
+        except ResourceExistsError as exc:
+            if attempt == max_update_attempts:
+                raise RuntimeError(
+                    f"Azure ML {resource_description} update remained blocked by "
+                    f"another operation after {max_update_attempts} attempts"
+                ) from exc
+            print(
+                f"Azure ML {resource_description} already has an operation in "
+                f"progress; waiting for it before retrying update "
+                f"({attempt}/{max_update_attempts})",
+                flush=True,
+            )
+            wait_for_resource_terminal_state(
+                get_resource,
+                resource_description,
+                poll_interval_seconds=poll_interval_seconds,
+                max_state_polls=max_state_polls,
+            )
+            continue
+
+        return wait_for_resource_terminal_state(
+            get_resource,
+            resource_description,
+            poll_interval_seconds=poll_interval_seconds,
+            max_state_polls=max_state_polls,
+        )
+
+    raise AssertionError("unreachable")
+
+
+def wait_for_resource_terminal_state(
+    get_resource: Callable[[], Any],
+    resource_description: str,
+    *,
+    poll_interval_seconds: int = DEFAULT_RESOURCE_POLL_INTERVAL_SECONDS,
+    max_state_polls: int = DEFAULT_RESOURCE_MAX_POLLS,
+) -> Any:
+    if max_state_polls < 1:
+        raise ValueError("max_state_polls must be at least 1")
+
+    resource = None
+    for poll_number in range(1, max_state_polls + 1):
+        if resource is None:
+            resource = get_resource()
+        state = str(getattr(resource, "provisioning_state", None))
+        print(
+            f"Azure ML {resource_description} provisioning state: {state}",
+            flush=True,
+        )
+        if state in SUCCESS_PROVISIONING_STATES:
+            return resource
+        if state in FAILED_PROVISIONING_STATES:
+            raise RuntimeError(
+                f"Azure ML {resource_description} provisioning finished with "
+                f"state {state}"
+            )
+        if poll_number == max_state_polls:
+            break
+        time.sleep(poll_interval_seconds)
+        resource = get_resource()
+
+    raise TimeoutError(
+        f"Azure ML {resource_description} did not reach a terminal provisioning "
+        f"state after {max_state_polls} state checks"
+    )
 
 
 def wait_for_job(
