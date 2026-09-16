@@ -16,25 +16,28 @@ test_batch_endpoint = importlib.import_module("test_batch_endpoint")
 train_and_register_model = importlib.import_module("train_and_register_model")
 
 
-def test_create_ml_client_uses_explicit_coordinates_and_noninteractive_credential(
-    monkeypatch,
-):
+@pytest.mark.parametrize("ci_environment", ["GITHUB_ACTIONS", "CI"])
+def test_ci_uses_validated_azure_cli_credential(monkeypatch, ci_environment):
     credential = Mock()
-    credential_type = Mock(return_value=credential)
+    cli_credential_type = Mock(return_value=credential)
+    default_credential_type = Mock()
     client_type = Mock(return_value=Mock())
-    monkeypatch.setattr(aml_client, "DefaultAzureCredential", credential_type)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setenv(ci_environment, "true")
+    monkeypatch.delenv("AZUREML_CREDENTIAL_MODE", raising=False)
+    monkeypatch.setattr(aml_client, "AzureCliCredential", cli_credential_type)
+    monkeypatch.setattr(aml_client, "DefaultAzureCredential", default_credential_type)
     monkeypatch.setattr(aml_client, "MLClient", client_type)
     args = argparse.Namespace(
         subscription_id="sub",
         resource_group="rg",
         workspace_name="ws",
     )
-
     aml_client.create_ml_client(args)
 
-    credential_type.assert_called_once_with(
-        exclude_interactive_browser_credential=True
-    )
+    cli_credential_type.assert_called_once_with()
+    default_credential_type.assert_not_called()
     credential.get_token.assert_called_once_with(
         "https://management.azure.com/.default"
     )
@@ -44,6 +47,77 @@ def test_create_ml_client_uses_explicit_coordinates_and_noninteractive_credentia
         resource_group_name="rg",
         workspace_name="ws",
     )
+
+
+def test_local_mode_uses_default_credential_without_managed_identity(monkeypatch):
+    credential = Mock()
+    cli_credential_type = Mock()
+    default_credential_type = Mock(return_value=credential)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("AZUREML_CREDENTIAL_MODE", raising=False)
+    monkeypatch.setattr(aml_client, "AzureCliCredential", cli_credential_type)
+    monkeypatch.setattr(aml_client, "DefaultAzureCredential", default_credential_type)
+
+    result = aml_client.create_azure_credential()
+
+    assert result is credential
+    cli_credential_type.assert_not_called()
+    default_credential_type.assert_called_once_with(
+        exclude_interactive_browser_credential=True,
+        exclude_managed_identity_credential=True,
+    )
+    credential.get_token.assert_called_once_with(
+        "https://management.azure.com/.default"
+    )
+
+
+def test_ci_rejects_default_mode_before_constructing_any_credential(monkeypatch):
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setenv("AZUREML_CREDENTIAL_MODE", "default")
+    cli_credential_type = Mock()
+    default_credential_type = Mock()
+    monkeypatch.setattr(aml_client, "AzureCliCredential", cli_credential_type)
+    monkeypatch.setattr(aml_client, "DefaultAzureCredential", default_credential_type)
+
+    with pytest.raises(RuntimeError, match="managed identity fallback"):
+        aml_client.create_azure_credential()
+
+    cli_credential_type.assert_not_called()
+    default_credential_type.assert_not_called()
+
+
+def test_credential_token_validation_failure_is_explicit(monkeypatch):
+    credential = Mock()
+    credential.get_token.side_effect = RuntimeError("not logged in")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.delenv("AZUREML_CREDENTIAL_MODE", raising=False)
+    monkeypatch.setattr(
+        aml_client,
+        "AzureCliCredential",
+        Mock(return_value=credential),
+    )
+
+    with pytest.raises(RuntimeError, match="azure/login completed successfully"):
+        aml_client.create_azure_credential()
+
+    credential.get_token.assert_called_once_with(
+        "https://management.azure.com/.default"
+    )
+
+
+def test_reusable_workflows_force_azure_cli_credential_mode():
+    repository_root = Path(__file__).parents[1]
+
+    for workflow_name in (
+        "python-sdk-v2-train-register.yml",
+        "python-sdk-v2-online.yml",
+        "python-sdk-v2-batch.yml",
+    ):
+        workflow = (
+            repository_root / ".github" / "workflows" / workflow_name
+        ).read_text(encoding="utf-8")
+        assert "AZUREML_CREDENTIAL_MODE: azure-cli" in workflow
 
 
 def test_online_traffic_update_uses_online_endpoint_operation(monkeypatch):
