@@ -2,12 +2,17 @@
 # Licensed under the MIT License.
 
 import argparse
+import os
 import time
 from typing import Any
 
 from azure.ai.ml import MLClient
-from azure.identity import DefaultAzureCredential
+from azure.identity import AzureCliCredential, DefaultAzureCredential
 
+AZUREML_CREDENTIAL_MODE = "AZUREML_CREDENTIAL_MODE"
+AZURE_CLI_CREDENTIAL_MODE = "azure-cli"
+DEFAULT_CREDENTIAL_MODE = "default"
+MANAGEMENT_SCOPE = "https://management.azure.com/.default"
 SUCCESS_JOB_STATUSES = {"Completed"}
 TERMINAL_JOB_STATUSES = {
     "Completed",
@@ -25,11 +30,58 @@ def add_workspace_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--workspace_name", required=True)
 
 
-def create_ml_client(args: argparse.Namespace) -> MLClient:
-    credential = DefaultAzureCredential(
-        exclude_interactive_browser_credential=True,
+def create_azure_credential() -> Any:
+    is_ci = _is_truthy(os.environ.get("GITHUB_ACTIONS")) or _is_truthy(
+        os.environ.get("CI")
     )
-    credential.get_token("https://management.azure.com/.default")
+    mode = os.environ.get(AZUREML_CREDENTIAL_MODE)
+    if mode is None:
+        mode = AZURE_CLI_CREDENTIAL_MODE if is_ci else DEFAULT_CREDENTIAL_MODE
+    mode = mode.strip().lower()
+
+    if mode not in {AZURE_CLI_CREDENTIAL_MODE, DEFAULT_CREDENTIAL_MODE}:
+        raise RuntimeError(
+            f"Unsupported {AZUREML_CREDENTIAL_MODE} value '{mode}'. "
+            f"Use '{AZURE_CLI_CREDENTIAL_MODE}' or '{DEFAULT_CREDENTIAL_MODE}'."
+        )
+    if is_ci and mode != AZURE_CLI_CREDENTIAL_MODE:
+        raise RuntimeError(
+            f"{AZUREML_CREDENTIAL_MODE} must be '{AZURE_CLI_CREDENTIAL_MODE}' in CI. "
+            "Run azure/login before the Python SDK step; managed identity fallback "
+            "is intentionally disabled."
+        )
+
+    if mode == AZURE_CLI_CREDENTIAL_MODE:
+        credential = AzureCliCredential()
+        credential_description = "Azure CLI credential created by azure/login"
+    else:
+        credential = DefaultAzureCredential(
+            exclude_interactive_browser_credential=True,
+            exclude_managed_identity_credential=True,
+        )
+        credential_description = "local DefaultAzureCredential"
+
+    try:
+        credential.get_token(MANAGEMENT_SCOPE)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Unable to acquire an Azure management token with "
+            f"{credential_description}. "
+            + (
+                "Verify that azure/login completed successfully in this job."
+                if mode == AZURE_CLI_CREDENTIAL_MODE
+                else "Sign in with Azure CLI or configure a supported local credential."
+            )
+        ) from exc
+    return credential
+
+
+def _is_truthy(value: str | None) -> bool:
+    return value is not None and value.strip().lower() in {"1", "true", "yes"}
+
+
+def create_ml_client(args: argparse.Namespace) -> MLClient:
+    credential = create_azure_credential()
     return MLClient(
         credential=credential,
         subscription_id=args.subscription_id,

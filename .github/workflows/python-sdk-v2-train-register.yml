@@ -64,6 +64,8 @@ jobs:
   train_register:
     environment: ${{ inputs.environment }}
     runs-on: ${{ inputs.runner }}
+    env:
+      AZUREML_CREDENTIAL_MODE: azure-cli
     outputs:
       training_job_name: ${{ steps.train.outputs.training_job_name }}
       model_name: ${{ steps.train.outputs.model_name }}

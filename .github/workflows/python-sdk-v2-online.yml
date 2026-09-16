@@ -70,6 +70,8 @@ jobs:
   deploy_test:
     environment: ${{ inputs.environment }}
     runs-on: ${{ inputs.runner }}
+    env:
+      AZUREML_CREDENTIAL_MODE: azure-cli
     outputs:
       endpoint_name: ${{ inputs.endpoint_name }}
       deployment_name: ${{ inputs.deployment_name }}

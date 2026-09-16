@@ -1,8 +1,11 @@
 # Azure ML Python SDK v2 reusable workflows
 
 These GitHub-native workflows use Azure ML Python SDK v2 for ML operations. They
-authenticate with GitHub Environment OIDC through `azure/login`, then construct
-`MLClient` with `DefaultAzureCredential` and explicit workspace coordinates.
+authenticate with GitHub Environment OIDC through `azure/login`, then use
+`AzureCliCredential` to consume that exact signed-in identity and construct
+`MLClient` with explicit workspace coordinates. The reusable workflows set
+`AZUREML_CREDENTIAL_MODE=azure-cli`; token acquisition is validated before any
+Azure ML operation, and CI never falls back to a runner node's managed identity.
 They never use `az ml` or interactive browser authentication.
 
 Call the workflows with an immutable `sdk_ref`:
@@ -33,6 +36,12 @@ the endpoint and deployment names. The batch workflow requires those endpoint
 and model inputs plus `compute`, `request_batch_file`, and optionally
 `request_type`, and also outputs the endpoint and deployment names. Each accepts
 an optional `runner` label (default `ubuntu-24.04`).
+
+Outside CI, the scripts use `DefaultAzureCredential` for local development with
+interactive browser and managed identity credentials excluded. Sign in with
+`az login` or configure another supported local credential. Set
+`AZUREML_CREDENTIAL_MODE=azure-cli` to require an existing Azure CLI login
+locally; `AZUREML_CREDENTIAL_MODE=default` is rejected in CI.
 
 Both deployment workflows create or update resources idempotently, wait for
 long-running operations, and test the deployment. Batch invocation waits for a
