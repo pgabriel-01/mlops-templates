@@ -1527,6 +1527,92 @@ def test_registry_build_environment_reuses_exact_provenance_after_download(
     client.environments.create_or_update.assert_not_called()
 
 
+def test_registry_build_environment_accepts_live_azure_tag_only_readback(
+    monkeypatch,
+):
+    client = Mock()
+    client.environments.get.side_effect = ResourceNotFoundError("not found")
+    provenance = create_batch_deployment._registry_provenance(
+        "azureml",
+        "sklearn-1.5",
+        "53",
+        create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+        "c4eb9fd2836f6f9a4e1fc749997ff0e3e5f9db28ac1dd3a19040745bc4171334",
+    )
+    registry_environment = Environment(
+        name="sklearn-1.5",
+        version="53",
+        build=BuildContext(
+            path=TEST_REGISTRY_SOURCE_URI,
+            dockerfile_path="Dockerfile",
+        ),
+    )
+
+    def create(environment):
+        return SimpleNamespace(
+            name=environment.name,
+            version="53",
+            id=TEST_WORKSPACE_ENVIRONMENT_ID,
+            image=None,
+            properties=None,
+            tags=environment.tags,
+            build=SimpleNamespace(
+                dockerfile_path="Dockerfile",
+                path=(
+                    "azureml://datastores/workspaceblobstore/paths/"
+                    "LocalUpload/environment"
+                ),
+            ),
+        )
+
+    client.environments.create_or_update.side_effect = create
+    monkeypatch.setattr(
+        create_batch_deployment,
+        "_download_registry_build_context",
+        lambda *args: (provenance["source_manifest_sha256"], {"Dockerfile"}),
+    )
+
+    result = create_batch_deployment._materialize_build_environment(
+        client,
+        _registry_client(),
+        registry_environment,
+        "azureml",
+        "sklearn-1.5",
+        "53",
+        create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+        "registry-azureml-sklearn-1-5",
+    )
+
+    assert result.properties is None
+    assert result.tags == provenance
+    assert result.build.path.endswith("/LocalUpload/environment")
+
+
+def test_workspace_environment_rejects_conflicting_provenance_carriers():
+    provenance = create_batch_deployment._registry_provenance(
+        "azureml",
+        "sklearn-1.5",
+        "53",
+        create_batch_deployment.DEFAULT_BATCH_ENVIRONMENT,
+        "a" * 64,
+    )
+    environment = SimpleNamespace(
+        name="registry-azureml-sklearn-1-5",
+        version="53",
+        id=TEST_WORKSPACE_ENVIRONMENT_ID,
+        properties=provenance,
+        tags={**provenance, "source_manifest_sha256": "b" * 64},
+    )
+
+    with pytest.raises(RuntimeError, match="collides"):
+        create_batch_deployment._validate_workspace_environment(
+            environment,
+            environment.name,
+            environment.version,
+            provenance,
+        )
+
+
 def test_registry_build_environment_fails_closed_on_workspace_collision(
     monkeypatch,
 ):

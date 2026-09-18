@@ -85,6 +85,13 @@ SOURCE_ENVIRONMENT_PROPERTY = "source_environment"
 SOURCE_VERSION_PROPERTY = "source_version"
 SOURCE_REFERENCE_PROPERTY = "source_reference"
 SOURCE_MANIFEST_PROPERTY = "source_manifest_sha256"
+SOURCE_PROVENANCE_PROPERTIES = (
+    SOURCE_REGISTRY_PROPERTY,
+    SOURCE_ENVIRONMENT_PROPERTY,
+    SOURCE_VERSION_PROPERTY,
+    SOURCE_REFERENCE_PROPERTY,
+    SOURCE_MANIFEST_PROPERTY,
+)
 
 
 def validate_immutable_environment_reference(reference: str) -> str:
@@ -556,6 +563,24 @@ def _environment_properties(environment: object) -> dict[str, str]:
     return dict(properties) if isinstance(properties, dict) else {}
 
 
+def _environment_provenance(environment: object) -> dict[str, str]:
+    tags = getattr(environment, "tags", None)
+    metadata = (
+        _environment_properties(environment),
+        dict(tags) if isinstance(tags, dict) else {},
+    )
+    provenance = {}
+    for key in SOURCE_PROVENANCE_PROPERTIES:
+        values = [source[key] for source in metadata if key in source]
+        if values and any(value != values[0] for value in values[1:]):
+            raise RuntimeError(
+                "Workspace environment contains conflicting registry provenance."
+            )
+        if values:
+            provenance[key] = values[0]
+    return provenance
+
+
 def _validate_workspace_environment(
     environment: object,
     expected_name: str,
@@ -564,12 +589,15 @@ def _validate_workspace_environment(
 ) -> object:
     actual_name = str(getattr(environment, "name", "") or "")
     actual_version = str(getattr(environment, "version", "") or "")
-    actual_properties = _environment_properties(environment)
+    try:
+        actual_provenance = _environment_provenance(environment)
+    except RuntimeError:
+        actual_provenance = {}
     if (
         actual_name != expected_name
         or actual_version != expected_version
         or any(
-            actual_properties.get(key) != value
+            actual_provenance.get(key) != value
             for key, value in expected_provenance.items()
         )
     ):
@@ -909,8 +937,8 @@ def verify_live_deployment(
     registry_reference = _parse_registry_environment_reference(requested_source)
     if registry_reference:
         _, _, registry_name, environment_name, version = registry_reference
-        properties = _environment_properties(workspace_environment)
-        manifest = properties.get(SOURCE_MANIFEST_PROPERTY, "")
+        provenance = _environment_provenance(workspace_environment)
+        manifest = provenance.get(SOURCE_MANIFEST_PROPERTY, "")
         if not re.fullmatch(r"[0-9a-f]{64}", manifest):
             raise RuntimeError(
                 "Workspace environment does not retain a valid source manifest."
@@ -922,7 +950,7 @@ def verify_live_deployment(
             SOURCE_REFERENCE_PROPERTY: requested_source,
             SOURCE_MANIFEST_PROPERTY: manifest,
         }
-        if any(properties.get(key) != value for key, value in expected_source.items()):
+        if any(provenance.get(key) != value for key, value in expected_source.items()):
             raise RuntimeError(
                 "Workspace environment does not retain the requested registry "
                 "source provenance."
